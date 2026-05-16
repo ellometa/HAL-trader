@@ -18,3 +18,8 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "respx>=0.23.1",
+]
