@@ -58,6 +58,18 @@ indices, futures with month codes). Add tests by manually visiting
 
 ---
 
+### P4b. Pine Script FVG / OB highlighter (visual rail)
+
+Standalone Pine v6 indicators that mirror `backend/ict/fvg.py` and
+`backend/ict/order_blocks.py` so the user sees the same zones HAL
+reasons about, drawn natively on the TradingView chart. Independent
+of the extension — paste-and-add-to-chart, one-time install. Detection
+rule MUST be identical to the Python implementation so numbers line up.
+Path 3 (extension-driven Pine) explicitly out of scope — too brittle
+for the maintenance cost. Two scripts:
+- `pine/hal_fvg.pine` — bullish/bearish/mitigated toggles.
+- `pine/hal_ob.pine` — bullish/bearish/mitigated toggles, swing_n input.
+
 ## Tier 2 — quality wins
 
 ### P5. `/reload-notes` endpoint
