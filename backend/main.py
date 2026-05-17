@@ -49,11 +49,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS for the Chrome extension (chrome-extension://<extension-id>) and any
-# localhost origin. Regex keeps the scope tight without enumerating ports.
+# CORS. MV3 content-script fetches use the *page's* origin, not the
+# extension's, so we need to allow tradingview.com explicitly in addition
+# to chrome-extension://* (used if/when we add a background fetch) and
+# localhost (for curl / local UIs). Backend is bound to 127.0.0.1 — not
+# reachable from the public internet — so this is safe.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^(chrome-extension://.*|http://localhost(:\d+)?)$",
+    allow_origin_regex=(
+        r"^(chrome-extension://.*"
+        r"|http://localhost(:\d+)?"
+        r"|https://(www\.)?tradingview\.com)$"
+    ),
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
