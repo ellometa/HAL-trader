@@ -89,6 +89,8 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  user-select: text;
+  -webkit-user-select: text;
 }
 .hal-empty {
   color: #787b86;
@@ -104,6 +106,9 @@
   border-radius: 8px;
   word-wrap: break-word;
   white-space: pre-wrap;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 .hal-msg-user {
   align-self: flex-end;
