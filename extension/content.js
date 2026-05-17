@@ -125,6 +125,13 @@
   `;
   document.body.appendChild(panel);
 
+  // TradingView attaches global mouse handlers that can hijack drag-to-select
+  // (and start chart drag instead). Stop these events at the panel boundary
+  // so text selection inside the panel works as expected.
+  for (const ev of ["mousedown", "mouseup", "mousemove", "click", "dblclick", "wheel"]) {
+    panel.addEventListener(ev, (e) => e.stopPropagation());
+  }
+
   const $ctx = panel.querySelector('[data-hal="ctx"]');
   const $tf = panel.querySelector('[data-hal="tf"]');
   const $messages = panel.querySelector('[data-hal="messages"]');
@@ -158,6 +165,10 @@
 
   function appendMessage(history, role, text) {
     history.push({ role, text, ts: Date.now() });
+    return appendBubble(role, text);
+  }
+
+  function appendBubble(role, text) {
     const empty = $messages.querySelector(".hal-empty");
     if (empty) empty.remove();
     const div = document.createElement("div");
@@ -165,6 +176,21 @@
     div.textContent = text;
     $messages.appendChild(div);
     $messages.scrollTop = $messages.scrollHeight;
+    return div;
+  }
+
+  // Parse one SSE frame ("event: ...\ndata: ...") into {event, data}.
+  function parseSSE(raw) {
+    let event = "message";
+    const dataLines = [];
+    for (const line of raw.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+    }
+    if (!dataLines.length) return null;
+    let data;
+    try { data = JSON.parse(dataLines.join("\n")); } catch { data = {}; }
+    return { event, data };
   }
 
   let history = [];
@@ -224,25 +250,91 @@
     $messages.appendChild(thinking);
     $messages.scrollTop = $messages.scrollHeight;
 
+    let assistantBubble = null;
+    let assistantText = "";
+    let sawDone = false;
+    let streamErr = null;
+
     try {
       const resp = await fetch(BACKEND, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ symbol, timeframe: selectedTimeframe, query: text }),
       });
-      const data = await resp.json().catch(() => ({}));
-      thinking.remove();
       if (!resp.ok) {
-        appendMessage(history, "error", data.detail || `Backend ${resp.status}`);
-      } else {
-        appendMessage(history, "assistant", data.answer || "(empty response)");
+        thinking.remove();
+        let detail = `Backend ${resp.status}`;
+        try {
+          const body = await resp.json();
+          if (body && body.detail) detail = body.detail;
+        } catch {}
+        appendMessage(history, "error", detail);
+        saveHistory(history);
+        return;
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      // Stream loop. Buffer raw text, split on the SSE frame delimiter
+      // (\n\n), dispatch each completed frame, keep the trailing partial.
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop();
+        for (const raw of frames) {
+          const evt = parseSSE(raw);
+          if (!evt) continue;
+          if (evt.event === "meta") {
+            // features available on evt.data — surfaced via debug expander in phase 8.
+            continue;
+          }
+          if (evt.event === "token") {
+            if (!assistantBubble) {
+              thinking.remove();
+              assistantBubble = appendBubble("assistant", "");
+            }
+            assistantText += evt.data.text || "";
+            // textContent (not innerHTML) so model output can't inject HTML.
+            assistantBubble.textContent = assistantText;
+            $messages.scrollTop = $messages.scrollHeight;
+            continue;
+          }
+          if (evt.event === "error") {
+            streamErr = evt.data.detail || "stream error";
+            continue;
+          }
+          if (evt.event === "done") {
+            sawDone = true;
+            continue;
+          }
+        }
       }
     } catch (err) {
-      thinking.remove();
-      appendMessage(history, "error",
-        `Could not reach backend at ${BACKEND}. Is uvicorn running? (${err.message})`
-      );
+      streamErr = `Could not reach backend at ${BACKEND}. Is uvicorn running? (${err.message})`;
     } finally {
+      // Clean up thinking indicator if we never got a token.
+      if (thinking.isConnected) thinking.remove();
+
+      if (streamErr) {
+        if (assistantBubble) assistantBubble.remove();
+        appendMessage(history, "error", streamErr);
+      } else if (assistantBubble) {
+        if (!sawDone) {
+          // Stream cut off mid-flight (e.g. backend killed). Flag it
+          // rather than silently leaving a truncated bubble.
+          appendMessage(history, "error", "(stream ended unexpectedly)");
+          // Still keep the partial answer in history below.
+          assistantText && history.push({ role: "assistant", text: assistantText, ts: Date.now() });
+        } else {
+          history.push({ role: "assistant", text: assistantText || "(empty response)", ts: Date.now() });
+        }
+      } else {
+        appendMessage(history, "error", "(no response)");
+      }
       saveHistory(history);
       $send.disabled = false;
       $input.focus();
