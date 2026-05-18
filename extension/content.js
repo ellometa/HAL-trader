@@ -179,6 +179,33 @@
     return div;
   }
 
+  // Build a one-line feature summary like "3 FVGs · 1 OB · 2 structure · 1 sweep".
+  function summarizeFeatures(features) {
+    if (!features) return "(no features)";
+    const parts = [];
+    const n = (k) => (features[k] || []).length;
+    if (n("fvgs")) parts.push(`${n("fvgs")} FVG${n("fvgs") === 1 ? "" : "s"}`);
+    if (n("order_blocks")) parts.push(`${n("order_blocks")} OB${n("order_blocks") === 1 ? "" : "s"}`);
+    if (n("structure")) parts.push(`${n("structure")} structure`);
+    if (n("liquidity_sweeps")) parts.push(`${n("liquidity_sweeps")} sweep${n("liquidity_sweeps") === 1 ? "" : "s"}`);
+    return parts.length ? parts.join(" · ") : "no features detected";
+  }
+
+  function appendDebugExpander(meta) {
+    const details = document.createElement("details");
+    details.className = "hal-debug";
+    const summary = document.createElement("summary");
+    const f = meta && meta.features;
+    summary.textContent = `view detected features (${summarizeFeatures(f)})`;
+    details.appendChild(summary);
+    const pre = document.createElement("pre");
+    pre.className = "hal-debug-json";
+    pre.textContent = JSON.stringify(f || {}, null, 2);
+    details.appendChild(pre);
+    $messages.appendChild(details);
+    $messages.scrollTop = $messages.scrollHeight;
+  }
+
   // Parse one SSE frame ("event: ...\ndata: ...") into {event, data}.
   function parseSSE(raw) {
     let event = "message";
@@ -254,6 +281,7 @@
     let assistantText = "";
     let sawDone = false;
     let streamErr = null;
+    let metaPayload = null;
 
     try {
       const resp = await fetch(BACKEND, {
@@ -289,7 +317,7 @@
           const evt = parseSSE(raw);
           if (!evt) continue;
           if (evt.event === "meta") {
-            // features available on evt.data — surfaced via debug expander in phase 8.
+            metaPayload = evt.data;
             continue;
           }
           if (evt.event === "token") {
@@ -331,6 +359,7 @@
           assistantText && history.push({ role: "assistant", text: assistantText, ts: Date.now() });
         } else {
           history.push({ role: "assistant", text: assistantText || "(empty response)", ts: Date.now() });
+          if (metaPayload) appendDebugExpander(metaPayload);
         }
       } else {
         appendMessage(history, "error", "(no response)");

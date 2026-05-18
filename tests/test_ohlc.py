@@ -8,6 +8,13 @@ import respx
 from backend import ohlc
 
 
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    ohlc.clear_cache()
+    yield
+    ohlc.clear_cache()
+
+
 def test_is_crypto_routes_correctly():
     assert ohlc._is_crypto("BTCUSDT")
     assert ohlc._is_crypto("ETHBTC")
@@ -101,3 +108,42 @@ def test_fetch_yfinance_route_and_schema(monkeypatch):
     assert list(df.columns) == ["timestamp", "open", "high", "low", "close", "volume"]
     assert len(df) == 3
     assert df["timestamp"].is_monotonic_increasing
+
+
+def test_cache_returns_same_data_without_refetching():
+    base_ms = 1_700_000_000_000
+    fake = [
+        [
+            base_ms, "100.0", "102.0", "99.5", "101.0", "12.34",
+            base_ms + 3_599_999, "0", 0, "0", "0", "0",
+        ]
+    ]
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.get("https://api.binance.com/api/v3/klines").mock(
+            return_value=httpx.Response(200, json=fake)
+        )
+        df1 = asyncio.run(ohlc.fetch_ohlc("BTCUSDT", "1h", 1))
+        df2 = asyncio.run(ohlc.fetch_ohlc("BTCUSDT", "1h", 1))
+
+    assert route.call_count == 1
+    assert ohlc.cache_stats() == {"hits": 1, "misses": 1}
+    pd.testing.assert_frame_equal(df1, df2)
+
+
+def test_cache_returns_independent_copies():
+    base_ms = 1_700_000_000_000
+    fake = [
+        [
+            base_ms, "100.0", "102.0", "99.5", "101.0", "12.34",
+            base_ms + 3_599_999, "0", 0, "0", "0", "0",
+        ]
+    ]
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://api.binance.com/api/v3/klines").mock(
+            return_value=httpx.Response(200, json=fake)
+        )
+        df1 = asyncio.run(ohlc.fetch_ohlc("BTCUSDT", "1h", 1))
+        df1.loc[0, "close"] = 999.0
+        df2 = asyncio.run(ohlc.fetch_ohlc("BTCUSDT", "1h", 1))
+
+    assert df2["close"].iloc[0] == 101.0

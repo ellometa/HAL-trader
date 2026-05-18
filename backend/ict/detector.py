@@ -5,13 +5,16 @@ from typing import Any
 import pandas as pd
 
 from backend.ict.fvg import detect_fvgs
+from backend.ict.liquidity import detect_liquidity_sweeps
 from backend.ict.order_blocks import detect_order_blocks
+from backend.ict.structure import detect_structure
 
 
 def detect_all(df: pd.DataFrame) -> dict[str, list[dict[str, Any]]]:
-    """Run all v0 detectors. Phase 8 will add structure (BOS/CHoCH) and
-    liquidity sweeps under additional keys."""
+    """Run all detectors. Order is presentational only — each is independent."""
     return {
         "fvgs": detect_fvgs(df),
         "order_blocks": detect_order_blocks(df),
+        "structure": detect_structure(df),
+        "liquidity_sweeps": detect_liquidity_sweeps(df),
     }

@@ -1,22 +1,198 @@
 # HAL
 
-ICT-aware chat overlay for TradingView. Local-only personal tool.
+ICT-aware chat overlay for TradingView. Personal tool, runs locally.
 
-## Quick start
+You're looking at a TradingView chart. You type a question into the
+floating panel ("is there a bullish OB near current price?"). HAL pulls
+the chart's OHLC, runs deterministic ICT detectors over it (FVGs, order
+blocks, market structure, liquidity sweeps), stuffs the structured
+features + your own trading notes into a Gemini 2.5 Flash prompt, and
+streams the answer back into the panel.
 
-```bash
-# install uv if you don't have it
-brew install uv
+No vision, no ML for detection — the geometry is computed in Python and
+handed to the model as JSON. The model writes the analysis; the
+detectors are the ground truth.
 
-# install deps (creates .venv automatically)
-uv sync
+## Architecture
 
-# copy env template and paste your key
-cp .env.example .env
-# edit .env -> set GEMINI_API_KEY=...
-
-# smoke test
-uv run python -m backend.hello
+```
+  ┌──────────────────────────┐
+  │ TradingView tab (Chrome) │
+  │  ┌────────────────────┐  │
+  │  │ HAL panel overlay  │  │  reads ?symbol= from URL
+  │  │  - floating button │  │  user types question
+  │  │  - SSE chat stream │  │
+  │  └─────────┬──────────┘  │
+  └────────────┼─────────────┘
+               │ POST /analyze {symbol, timeframe, query}
+               ▼
+  ┌──────────────────────────────────────────┐
+  │ FastAPI backend (127.0.0.1:8000)         │
+  │                                          │
+  │  ohlc.py  ─►  Binance / yfinance (cached)│
+  │     │                                    │
+  │     ▼                                    │
+  │  ict/*  ─►  {fvgs, order_blocks,         │
+  │     │        structure, liquidity_sweeps}│
+  │     ▼                                    │
+  │  prompts.py  ◄── notes.md (from Notion)  │
+  │     │                                    │
+  │     ▼                                    │
+  │  Gemini 2.5 Flash (streaming)            │
+  └────────────┬─────────────────────────────┘
+               │ SSE: meta / token / done
+               ▼
+  Extension renders tokens progressively
 ```
 
-Architecture, build phases, and design decisions live in `plans/`.
+## Install
+
+### 1. Backend
+
+Requires Python 3.11+ and [uv](https://github.com/astral-sh/uv).
+
+```bash
+brew install uv         # or pipx install uv / pip install uv
+uv sync                 # creates .venv, installs deps
+cp .env.example .env    # then edit .env
+```
+
+Set in `.env`:
+
+```
+GEMINI_API_KEY=...           # https://aistudio.google.com/apikey
+NOTION_TOKEN=...             # only needed to re-ingest notes
+NOTION_ROOT_PAGE_ID=...      # root page of your trading-notes tree
+```
+
+Run the server:
+
+```bash
+uv run uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8000/health
+# {"ok":true}
+```
+
+### 2. Chrome extension
+
+1. Open `chrome://extensions`.
+2. Enable Developer mode (top right).
+3. Click "Load unpacked", point at the `extension/` directory.
+4. Open any TradingView chart. A blue "HAL" button appears bottom-right.
+5. Click it; type a question; press Enter.
+
+The extension talks to `http://localhost:8000`. If the backend isn't
+running, the panel surfaces an error.
+
+## Updating notes
+
+`backend/notes.md` is what HAL reasons over. Re-ingest from Notion:
+
+```bash
+uv run python scripts/ingest_notion.py
+```
+
+The script walks the Notion subtree rooted at `NOTION_ROOT_PAGE_ID`
+and overwrites `backend/notes.md` with the flattened markdown. Restart
+uvicorn to pick up changes (P5 reload endpoint is coming).
+
+## Querying from curl (debugging)
+
+The non-streaming `/analyze_blocking` endpoint returns the same shape as
+`/analyze` but as a single JSON blob:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/analyze_blocking \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTCUSDT","timeframe":"4h","query":"What is the structure?"}' \
+  | jq .
+```
+
+Add `?debug=1` to either endpoint to get the assembled system prompt +
+user message echoed back. SSE endpoint:
+
+```bash
+curl -N -X POST http://127.0.0.1:8000/analyze \
+  -H 'Content-Type: application/json' \
+  -d '{"symbol":"BTCUSDT","timeframe":"4h","query":"What is the structure?"}'
+```
+
+## Troubleshooting
+
+**"Couldn't detect a symbol on this page."** The extension reads
+`?symbol=` from the chart URL. If you're on the homepage or a non-chart
+page, this fails. Open a `/chart/...` URL and it'll work.
+
+**`yfinance returned no data for X interval=1m period=5d`.** yfinance
+throttles intraday history aggressively — 1m bars only go back ~7 days
+and the API gets flaky under bursty calls. Try a higher timeframe; if
+you still get nothing, wait a minute and retry.
+
+**Forex symbols routing to Binance.** Known v0 limitation: `EURUSD`
+matches the crypto regex (`[A-Z]+USD`) and goes to Binance, which
+doesn't list it. Fix coming with the forex `=X` suffix routing.
+
+**Panel covers a chart control.** The panel pins to the top-right
+corner. Drag the chart's own toolbars first, or close the panel with ✕
+when you don't need it.
+
+**CORS error in the browser console.** The backend allows
+`tradingview.com` + `localhost` origins. If you're on a different
+TV mirror or a non-default extension origin, edit the
+`allow_origin_regex` in `backend/main.py`.
+
+**Backend not responding.** Is uvicorn actually up? `curl
+http://127.0.0.1:8000/health` from a terminal. If it hangs, the port
+might be held by an old process — `lsof -iTCP:8000 -sTCP:LISTEN` and
+kill the stale pid.
+
+## Repo layout
+
+```
+HAL/
+  backend/
+    main.py            FastAPI app, /analyze (SSE) + /analyze_blocking
+    config.py          loads .env
+    ohlc.py            Binance + yfinance fetch, 60s cache
+    prompts.py         system + user prompt assembly, UTC→IST conversion
+    notes.md           generated by scripts/ingest_notion.py
+    ict/
+      detector.py      composes per-concept detectors
+      fvg.py           3-candle Fair Value Gaps
+      order_blocks.py  BOS-confirmed order blocks
+      structure.py     BOS / CHoCH + shared find_swings helper
+      liquidity.py     wick-only sweeps of swing highs/lows
+  extension/
+    manifest.json
+    content.js         injects FAB + panel into TV pages
+    panel.css
+    icons/
+  scripts/
+    ingest_notion.py   Notion subtree → notes.md
+  tests/               pytest fixtures for detectors + OHLC
+  plans/               phase plans, design docs, ideation
+  pyproject.toml       uv-managed
+```
+
+## Status
+
+Phases 1–8 done. Detectors cover FVG, OB, structure (BOS/CHoCH), and
+liquidity sweeps. Streaming SSE end-to-end. OHLC cached. The panel
+exposes a "view detected features" expander under each answer.
+
+Phase 9 (`plans/09_extension_polish.md`) is next: per-tab conversation
+memory, abort button, robust symbol detection, Pine Script visual rail,
+Shadow DOM.
+
+Architectural ideation lives under `plans/ideation/`.
+
+## Tech
+
+Python 3.11+, FastAPI, `google-genai`, pandas, yfinance, httpx,
+notion-client. Extension is vanilla JS — no bundler, no framework.
+Package management via `uv`.

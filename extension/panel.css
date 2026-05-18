@@ -164,6 +164,40 @@
 }
 .hal-send:disabled { background: #2a2e39; color: #787b86; cursor: not-allowed; }
 
+.hal-debug {
+  align-self: flex-start;
+  max-width: 92%;
+  font-size: 11px;
+  color: #787b86;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.hal-debug > summary {
+  cursor: pointer;
+  padding: 2px 0;
+  list-style: none;
+  outline: none;
+}
+.hal-debug > summary::before {
+  content: "▸ ";
+  display: inline-block;
+  width: 12px;
+}
+.hal-debug[open] > summary::before { content: "▾ "; }
+.hal-debug > summary:hover { color: #d1d4dc; }
+.hal-debug-json {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: #0f1218;
+  border: 1px solid #2a2e39;
+  border-radius: 6px;
+  font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #b6b9c1;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 /* Scrollbar styling — match TV's dark theme */
 .hal-messages::-webkit-scrollbar { width: 6px; }
 .hal-messages::-webkit-scrollbar-thumb { background: #2a2e39; border-radius: 3px; }

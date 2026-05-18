@@ -12,6 +12,7 @@ symbols here.
 """
 import asyncio
 import re
+import time
 
 import httpx
 import pandas as pd
@@ -65,15 +66,51 @@ def _is_crypto(symbol: str) -> bool:
     return any(p.match(symbol) for p in _CRYPTO_PATTERNS)
 
 
+# Process-local OHLC cache. TTL kills entries on the natural bar boundary
+# (60s); within that window, repeat queries on the same chart skip the
+# network. Keyed by (symbol, timeframe, limit) — limit varies almost never
+# but including it avoids surprises if a caller changes it.
+_CACHE_TTL = 60.0  # seconds
+_cache: dict[tuple[str, str, int], tuple[float, pd.DataFrame]] = {}
+_cache_stats = {"hits": 0, "misses": 0}
+
+
+def cache_stats() -> dict[str, int]:
+    """Cache hit/miss counters. Used by tests and the optional /stats endpoint."""
+    return dict(_cache_stats)
+
+
+def clear_cache() -> None:
+    _cache.clear()
+    _cache_stats["hits"] = 0
+    _cache_stats["misses"] = 0
+
+
 async def fetch_ohlc(symbol: str, timeframe: str, limit: int = 200) -> pd.DataFrame:
-    """Fetch up to `limit` most-recent candles for `symbol` at `timeframe`."""
+    """Fetch up to `limit` most-recent candles for `symbol` at `timeframe`.
+
+    Cached for ``_CACHE_TTL`` seconds. Returns a defensive copy so detector
+    code can't mutate the cached frame.
+    """
     if timeframe not in _BACKEND_TIMEFRAMES:
         raise TimeframeError(
             f"Unknown timeframe {timeframe!r}. Supported: {sorted(_BACKEND_TIMEFRAMES)}"
         )
+
+    key = (symbol, timeframe, limit)
+    now = time.monotonic()
+    cached = _cache.get(key)
+    if cached is not None and now - cached[0] < _CACHE_TTL:
+        _cache_stats["hits"] += 1
+        return cached[1].copy()
+
+    _cache_stats["misses"] += 1
     if _is_crypto(symbol):
-        return await _fetch_binance(symbol, timeframe, limit)
-    return await _fetch_yfinance(symbol, timeframe, limit)
+        df = await _fetch_binance(symbol, timeframe, limit)
+    else:
+        df = await _fetch_yfinance(symbol, timeframe, limit)
+    _cache[key] = (now, df)
+    return df.copy()
 
 
 async def _fetch_binance(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:

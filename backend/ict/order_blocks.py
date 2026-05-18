@@ -13,6 +13,8 @@ from typing import Any
 
 import pandas as pd
 
+from backend.ict.structure import find_swings
+
 _REQUIRED_COLS = {"timestamp", "open", "high", "low", "close", "volume"}
 
 
@@ -22,31 +24,6 @@ def _validate(df: pd.DataFrame) -> None:
         raise ValueError(f"DataFrame missing columns: {sorted(missing)}")
 
 
-def _find_swings(
-    df: pd.DataFrame, n: int = 2
-) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
-    """Return (swing_highs, swing_lows) as lists of (index, price).
-
-    Strict inequality on both sides: avoids treating plateaus as swings,
-    which would otherwise let identical-high candles "create" structure.
-    """
-    high = df["high"].to_numpy()
-    low = df["low"].to_numpy()
-    N = len(df)
-    swing_highs: list[tuple[int, float]] = []
-    swing_lows: list[tuple[int, float]] = []
-    for k in range(n, N - n):
-        if all(high[k] > high[k - j] for j in range(1, n + 1)) and all(
-            high[k] > high[k + j] for j in range(1, n + 1)
-        ):
-            swing_highs.append((k, float(high[k])))
-        if all(low[k] < low[k - j] for j in range(1, n + 1)) and all(
-            low[k] < low[k + j] for j in range(1, n + 1)
-        ):
-            swing_lows.append((k, float(low[k])))
-    return swing_highs, swing_lows
-
-
 def detect_order_blocks(df: pd.DataFrame, swing_n: int = 2) -> list[dict[str, Any]]:
     """Detect order blocks confirmed by a BOS."""
     _validate(df)
@@ -54,7 +31,7 @@ def detect_order_blocks(df: pd.DataFrame, swing_n: int = 2) -> list[dict[str, An
     if n < 2 * swing_n + 2:
         return []
 
-    swing_highs, swing_lows = _find_swings(df, swing_n)
+    swing_highs, swing_lows = find_swings(df, swing_n)
     open_ = df["open"].to_numpy()
     high = df["high"].to_numpy()
     low = df["low"].to_numpy()
