@@ -1,17 +1,21 @@
 # HAL
 
-ICT-aware chat overlay for TradingView. Personal tool, runs locally.
+A chart copilot for TradingView. Personal tool, runs locally.
 
-You're looking at a TradingView chart. You type a question into the
-floating panel ("is there a bullish OB near current price?"). HAL pulls
-the chart's OHLC, runs deterministic ICT detectors over it (FVGs, order
-blocks, market structure, liquidity sweeps), stuffs the structured
-features + your own trading notes into a Gemini 2.5 Flash prompt, and
-streams the answer back into the panel.
+You open a chart and a question forms. *Is there a bullish order block
+near current price? Did the 4h sweep yesterday's high before the move?
+Where is the next pool of liquidity sitting?* HAL is the floating panel
+you ask.
 
-No vision, no ML for detection — the geometry is computed in Python and
-handed to the model as JSON. The model writes the analysis; the
-detectors are the ground truth.
+It doesn't look at the chart. It reads the underlying OHLC, runs a
+handful of deterministic ICT detectors over the geometry — fair value
+gaps, order blocks, market structure, liquidity sweeps — folds the
+output into a prompt alongside your own trading notes, and streams a
+Gemini 2.5 Flash answer back into the panel.
+
+No vision model, no ML for detection. The geometry is computed in
+Python and handed to the model as JSON. The model writes the prose;
+the detectors are the ground truth.
 
 ## Architecture
 
@@ -181,15 +185,16 @@ HAL/
 
 ## Status
 
-Phases 1–9 done. Detectors cover FVG, OB, structure (BOS/CHoCH), and
-liquidity sweeps. Streaming SSE end-to-end with per-session conversation
-memory (server-side, in-memory). OHLC cached. The panel runs inside a
-Shadow DOM, supports mid-stream abort, and exposes a "view detected
-features" expander under each answer. Pine highlighters in `pine/` mirror
-the Python detection for FVG and OB.
+Phases 1–9 have landed. Detection covers FVG, order blocks, BOS/CHoCH,
+and liquidity sweeps. The panel lives inside a Shadow DOM, streams
+tokens as they arrive, remembers conversation per-chart, parses the
+timeframe from your question, and can be aborted mid-stream. OHLC is
+cached for 60s per (symbol, timeframe). Pine highlighters in `pine/`
+mirror the Python detection so you can audit what HAL claims against
+your own eyes.
 
-Post-v0 candidates live under `plans/ideation/` — journaling (SQLite,
-server-side history), launchd auto-start, brain-topology shifts.
+What comes after lives in `plans/ideation/` — journaling, launchd
+auto-start, brain-topology shifts. Some of it will happen.
 
 ## Tech
 
