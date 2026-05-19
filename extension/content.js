@@ -55,6 +55,26 @@
     return detectedSymbol;
   }
 
+  // ───────────── timeframe parsing ─────────────
+  //
+  // The panel's TF dropdown is the source of truth, but a natural-language
+  // mention in the question ("what about the 1h?", "show me daily") should
+  // beat a stale dropdown. First match wins; longer/more-specific patterns
+  // are tested first so "15m" doesn't get eaten by the "1m"/"5m" rules.
+  // Returns one of TF_OPTIONS, or null if no TF is mentioned.
+
+  function parseTimeframeFromQuery(q) {
+    const t = q.toLowerCase();
+    if (/\b15\s*m(?:in(?:ute)?s?)?\b/.test(t)) return "15m";
+    if (/\b5\s*m(?:in(?:ute)?s?)?\b/.test(t)) return "5m";
+    if (/\b1\s*m(?:in(?:ute)?s?)?\b/.test(t)) return "1m";
+    if (/\b4\s*h(?:our|r)?s?\b/.test(t)) return "4h";
+    if (/\b1\s*h(?:our|r)?s?\b/.test(t) || /\bhourly\b/.test(t)) return "1h";
+    if (/\b1\s*d(?:ay)?\b/.test(t) || /\bdaily\b/.test(t)) return "1D";
+    if (/\b1\s*w(?:eek)?\b/.test(t) || /\bweekly\b/.test(t)) return "1W";
+    return null;
+  }
+
   // ───────────── storage ─────────────
 
   function deriveStorageKeys() {
@@ -330,6 +350,16 @@
       saveHistory(history);
       return;
     }
+
+    // If the question mentions a TF, sync the dropdown so the UI reflects
+    // what HAL actually used and follow-up questions inherit the same TF.
+    const tfFromText = parseTimeframeFromQuery(text);
+    if (tfFromText && tfFromText !== selectedTimeframe) {
+      selectedTimeframe = tfFromText;
+      $tf.value = tfFromText;
+      saveTimeframe(tfFromText);
+    }
+
     $input.value = "";
     $input.style.height = "auto";
     inflightController = new AbortController();
