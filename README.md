@@ -1,5 +1,8 @@
 # HAL
 
+> "Long the OB at 2840, HAL."
+> "I'm sorry, Dave. That's not a valid setup."
+
 A chart copilot for TradingView. Personal tool, runs locally.
 
 You open a chart and a question forms. *Is there a bullish order block
