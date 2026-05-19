@@ -12,8 +12,13 @@
     {
       "matches": ["https://www.tradingview.com/*"],
       "js": ["content.js"],
-      "css": ["panel.css"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["panel.css"],
+      "matches": ["https://www.tradingview.com/*"]
     }
   ],
   "host_permissions": ["http://localhost:8000/*"],

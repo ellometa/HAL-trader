@@ -7,8 +7,10 @@ Why SSE over WebSockets / chunked plain text: (a) one-way fits our shape,
 (b) browser fetch + reader already speaks it, (c) the wire format is
 standard enough that we could drop in EventSource later if useful.
 """
+import asyncio
 import json
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -38,6 +40,54 @@ class _State:
 
 
 _state = _State()
+
+# Per-session conversation memory. Personal tool, no auth — session_id is
+# generated client-side and treated as authoritative. Features payloads
+# are *not* stored — they'd be stale by the next turn; only question/answer
+# text replays.
+_sessions: dict[str, list[dict[str, Any]]] = {}
+_SESSION_TURN_CAP = 20            # total turns per session (user + assistant)
+_SESSION_IDLE_TIMEOUT = 3600.0    # seconds before idle session is dropped
+_HISTORY_TURNS_TO_SEND = 6        # last N turns prepended to Gemini contents
+
+
+def _evict_stale_sessions(now: float) -> None:
+    stale = [
+        sid for sid, turns in _sessions.items()
+        if turns and now - turns[-1]["ts"] > _SESSION_IDLE_TIMEOUT
+    ]
+    for sid in stale:
+        del _sessions[sid]
+
+
+def _session_contents(session_id: str | None, user_msg: str) -> Any:
+    """Build the Gemini ``contents`` arg.
+
+    Without a session, return the single-string user message (preserves
+    phase 7 behavior). With a session, prepend up to ``_HISTORY_TURNS_TO_SEND``
+    prior turns as Content objects, then the new user turn.
+    """
+    if not session_id:
+        return user_msg
+    history: list[dict[str, Any]] = []
+    for turn in _sessions.get(session_id, [])[-_HISTORY_TURNS_TO_SEND:]:
+        role = "user" if turn["role"] == "user" else "model"
+        history.append({"role": role, "parts": [{"text": turn["text"]}]})
+    history.append({"role": "user", "parts": [{"text": user_msg}]})
+    return history
+
+
+def _record_turns(session_id: str | None, query: str, assistant_text: str) -> None:
+    """Store the bare question + answer pair for replay. Features payload
+    deliberately excluded — it'd be stale by the next call."""
+    if not session_id or not assistant_text:
+        return
+    now = time.time()
+    session = _sessions.setdefault(session_id, [])
+    session.append({"role": "user", "text": query, "ts": now})
+    session.append({"role": "assistant", "text": assistant_text, "ts": now})
+    if len(session) > _SESSION_TURN_CAP:
+        del session[: len(session) - _SESSION_TURN_CAP]
 
 
 @asynccontextmanager
@@ -76,6 +126,7 @@ class AnalyzeRequest(BaseModel):
     symbol: str
     timeframe: str
     query: str
+    session_id: str | None = None
 
 
 @app.get("/health")
@@ -112,9 +163,11 @@ def _sse(event: str, payload: dict[str, Any]) -> str:
 
 @app.post("/analyze")
 async def analyze(req: AnalyzeRequest, debug: int = 0) -> StreamingResponse:
+    _evict_stale_sessions(time.time())
     features, system_prompt, user_msg, current_price, candles_used = await _prepare(req)
     assert _state.client is not None
     client = _state.client
+    contents = _session_contents(req.session_id, user_msg)
 
     async def gen() -> AsyncIterator[str]:
         meta: dict[str, Any] = {
@@ -126,22 +179,30 @@ async def analyze(req: AnalyzeRequest, debug: int = 0) -> StreamingResponse:
             meta["_debug"] = {"system_prompt": system_prompt, "user_message": user_msg}
         yield _sse("meta", meta)
 
+        accumulated: list[str] = []
         try:
             stream = await client.aio.models.generate_content_stream(
                 model=_MODEL,
-                contents=user_msg,
+                contents=contents,
                 config=types.GenerateContentConfig(system_instruction=system_prompt),
             )
             async for chunk in stream:
                 text = getattr(chunk, "text", None)
                 if text:
+                    accumulated.append(text)
                     yield _sse("token", {"text": text})
+        except asyncio.CancelledError:
+            # Client disconnected mid-stream (P3 abort). Persist the partial
+            # so the next turn carries the context the user already saw.
+            _record_turns(req.session_id, req.query, "".join(accumulated))
+            raise
         except Exception as e:
             # Localhost-only — leaking the message is fine for debugging.
             log.exception("gemini stream failed")
             yield _sse("error", {"detail": f"Gemini error: {e}"})
             return
 
+        _record_turns(req.session_id, req.query, "".join(accumulated))
         yield _sse("done", {})
 
     return StreamingResponse(
@@ -158,17 +219,20 @@ async def analyze(req: AnalyzeRequest, debug: int = 0) -> StreamingResponse:
 @app.post("/analyze_blocking")
 async def analyze_blocking(req: AnalyzeRequest, debug: int = 0) -> dict[str, Any]:
     """Phase-4 non-streaming behavior, kept for curl-friendly debugging."""
+    _evict_stale_sessions(time.time())
     features, system_prompt, user_msg, current_price, candles_used = await _prepare(req)
     assert _state.client is not None
+    contents = _session_contents(req.session_id, user_msg)
     try:
         resp = await _state.client.aio.models.generate_content(
             model=_MODEL,
-            contents=user_msg,
+            contents=contents,
             config=types.GenerateContentConfig(system_instruction=system_prompt),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gemini error: {e}") from e
 
+    _record_turns(req.session_id, req.query, resp.text or "")
     body: dict[str, Any] = {
         "answer": resp.text,
         "features": features,

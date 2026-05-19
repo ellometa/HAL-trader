@@ -1,0 +1,100 @@
+// Mirrors backend/ict/order_blocks.py — BOS-confirmed order blocks.
+// Bullish OB = last DOWN candle before a close that breaks above the most
+// recent unbroken swing high. Bearish OB = mirror.
+// Zone = full wick range of the OB candle. Mitigation: any bar after the
+// BOS bar whose range overlaps the zone.
+//
+// Swing detection: strict-greater-than over swing_n bars on each side
+// (ta.pivothigh / ta.pivotlow already use strict comparisons).
+
+//@version=6
+indicator("HAL Order Blocks", "HAL OB", overlay = true, max_boxes_count = 500)
+
+swing_n   = input.int(2, "Swing N (bars each side)", minval = 1, maxval = 10)
+show_bull = input.bool(true,  "Bullish OB")
+show_bear = input.bool(true,  "Bearish OB")
+show_mit  = input.bool(true,  "Show mitigated zones")
+col_bull  = input.color(color.new(color.green, 80), "Bullish color")
+col_bear  = input.color(color.new(color.red,   80), "Bearish color")
+col_mit   = input.color(color.new(color.gray,  90), "Mitigated color")
+
+// Unbroken swing levels — oldest first, most recent at end.
+var array<int>   sh_idx = array.new<int>()
+var array<float> sh_prc = array.new<float>()
+var array<int>   sl_idx = array.new<int>()
+var array<float> sl_prc = array.new<float>()
+
+// Active OB zones (unmitigated). end_idx = BOS bar; mitigation gates on it.
+var array<box>  ob_boxes   = array.new<box>()
+var array<int>  ob_end_idx = array.new<int>()
+
+ph = ta.pivothigh(high, swing_n, swing_n)
+pl = ta.pivotlow(low, swing_n, swing_n)
+
+if not na(ph)
+    array.push(sh_idx, bar_index - swing_n)
+    array.push(sh_prc, ph)
+if not na(pl)
+    array.push(sl_idx, bar_index - swing_n)
+    array.push(sl_prc, pl)
+
+// Bullish BOS: close above most recent unbroken swing high.
+if array.size(sh_prc) > 0
+    last = array.size(sh_prc) - 1
+    last_idx = array.get(sh_idx, last)
+    last_prc = array.get(sh_prc, last)
+    if close > last_prc
+        ob_bar = -1
+        // Walk backwards from previous bar (offset 1) to swing+1 (offset
+        // bar_index-last_idx-1) — first DOWN candle is the bullish OB.
+        for j = 1 to bar_index - last_idx - 1
+            if close[j] < open[j]
+                ob_bar := bar_index - j
+                break
+        if ob_bar >= 0 and show_bull
+            off = bar_index - ob_bar
+            bx = box.new(ob_bar, high[off], bar_index, low[off],
+                 bgcolor = col_bull, border_color = na)
+            array.push(ob_boxes, bx)
+            array.push(ob_end_idx, bar_index)
+        array.remove(sh_idx, last)
+        array.remove(sh_prc, last)
+
+// Bearish BOS: close below most recent unbroken swing low.
+if array.size(sl_prc) > 0
+    last = array.size(sl_prc) - 1
+    last_idx = array.get(sl_idx, last)
+    last_prc = array.get(sl_prc, last)
+    if close < last_prc
+        ob_bar = -1
+        for j = 1 to bar_index - last_idx - 1
+            if close[j] > open[j]
+                ob_bar := bar_index - j
+                break
+        if ob_bar >= 0 and show_bear
+            off = bar_index - ob_bar
+            bx = box.new(ob_bar, high[off], bar_index, low[off],
+                 bgcolor = col_bear, border_color = na)
+            array.push(ob_boxes, bx)
+            array.push(ob_end_idx, bar_index)
+        array.remove(sl_idx, last)
+        array.remove(sl_prc, last)
+
+// Extend right edge + mitigation check (only after the BOS bar).
+if array.size(ob_boxes) > 0
+    i = array.size(ob_boxes) - 1
+    while i >= 0
+        bx = array.get(ob_boxes, i)
+        end_i = array.get(ob_end_idx, i)
+        box.set_right(bx, bar_index)
+        if bar_index > end_i
+            top = box.get_top(bx)
+            bot = box.get_bottom(bx)
+            if low <= top and high >= bot
+                if show_mit
+                    box.set_bgcolor(bx, col_mit)
+                else
+                    box.delete(bx)
+                array.remove(ob_boxes, i)
+                array.remove(ob_end_idx, i)
+        i := i - 1

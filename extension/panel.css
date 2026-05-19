@@ -163,6 +163,8 @@
   font-weight: 600;
 }
 .hal-send:disabled { background: #2a2e39; color: #787b86; cursor: not-allowed; }
+.hal-send.hal-stop { background: #5a1f26; }
+.hal-send.hal-stop:hover { background: #722730; }
 
 .hal-debug {
   align-self: flex-start;

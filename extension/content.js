@@ -2,7 +2,7 @@
 // bundler, no service worker. Injects a floating button, opens a side
 // panel, talks to localhost:8000/analyze.
 
-(() => {
+(async () => {
   if (window.__halInjected) return;
   window.__halInjected = true;
 
@@ -12,18 +12,26 @@
   const TF_DEFAULT = "1h";
   // Per-chart TF preference is persisted under this key prefix.
   const TF_STORAGE_PREFIX = "hal_tf_";
+  // Per-chart session id persisted across reloads so multi-turn context
+  // survives the panel being closed and reopened.
+  const SESSION_STORAGE_PREFIX = "hal_session_";
 
   let detectedSymbol = null;
   let selectedTimeframe = TF_DEFAULT;
   let isOpen = false;
   let storageKey = null;
   let tfStorageKey = null;
+  let sessionStorageKey = null;
+  let sessionId = null;
 
   // ───────────── symbol detection ─────────────
   //
-  // We rely on the URL: TradingView consistently writes ?symbol=EXCHANGE:TICKER
-  // when a chart is loaded. The page title shows price/percent only, no TF.
-  // Title is a weak fallback in case ?symbol is missing (rare).
+  // TradingView consistently writes ?symbol=EXCHANGE:TICKER on chart URLs.
+  // Verified 2026-05-19 across: spot crypto, perp futures (.P suffix),
+  // stocks, indices, forex, futures (month codes / continuous contracts).
+  // The previous title-regex fallback never fired in practice — removed
+  // so a parse miss surfaces a visible error instead of a silent wrong
+  // symbol.
 
   function stripExchange(sym) {
     if (!sym) return sym;
@@ -41,16 +49,9 @@
     }
   }
 
-  function symbolFromTitle() {
-    // Observed format: "BTCUSDT 78,206.45 ▼ −1.15% Unnamed"
-    // Take the first word if it looks like a ticker.
-    const m = document.title.match(/^([A-Z0-9.:_-]{2,16})\s/);
-    return m ? stripExchange(m[1]) : null;
-  }
-
   function detectSymbol() {
-    const s = symbolFromUrl() || symbolFromTitle();
-    if (s) detectedSymbol = s;
+    const s = symbolFromUrl();
+    detectedSymbol = s || null;
     return detectedSymbol;
   }
 
@@ -61,6 +62,33 @@
     const slug = m ? m[1] : location.pathname.replace(/\W+/g, "_");
     storageKey = "hal_chat_" + slug;
     tfStorageKey = TF_STORAGE_PREFIX + slug;
+    sessionStorageKey = SESSION_STORAGE_PREFIX + slug;
+  }
+
+  function loadOrCreateSession() {
+    if (!chrome?.storage?.local) {
+      sessionId = crypto.randomUUID();
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      chrome.storage.local.get(sessionStorageKey, (obj) => {
+        const existing = obj[sessionStorageKey];
+        if (existing) {
+          sessionId = existing;
+          resolve();
+        } else {
+          sessionId = crypto.randomUUID();
+          chrome.storage.local.set({ [sessionStorageKey]: sessionId }, resolve);
+        }
+      });
+    });
+  }
+
+  function rotateSession() {
+    sessionId = crypto.randomUUID();
+    if (chrome?.storage?.local) {
+      chrome.storage.local.set({ [sessionStorageKey]: sessionId });
+    }
   }
 
   function loadHistory() {
@@ -95,12 +123,29 @@
   }
 
   // ───────────── UI ─────────────
+  //
+  // Host element + Shadow DOM. Isolates HAL styling from TradingView's CSS
+  // (and vice versa) so a TV restyle can't bleed into the panel.
+
+  const host = document.createElement("div");
+  host.id = "hal-host";
+  document.body.appendChild(host);
+  const shadow = host.attachShadow({ mode: "open" });
+
+  // Fetch the panel stylesheet from the extension package and inline it
+  // into the shadow root. panel.css is listed under web_accessible_resources
+  // so this URL is fetchable from the content script.
+  const cssUrl = chrome.runtime.getURL("panel.css");
+  const cssText = await fetch(cssUrl).then((r) => r.text());
+  const style = document.createElement("style");
+  style.textContent = cssText;
+  shadow.appendChild(style);
 
   const fab = document.createElement("button");
   fab.className = "hal-fab";
   fab.textContent = "HAL";
   fab.title = "Open HAL";
-  document.body.appendChild(fab);
+  shadow.appendChild(fab);
 
   const panel = document.createElement("div");
   panel.className = "hal-panel";
@@ -123,13 +168,13 @@
       <button class="hal-send" data-hal="send">Send</button>
     </div>
   `;
-  document.body.appendChild(panel);
+  shadow.appendChild(panel);
 
-  // TradingView attaches global mouse handlers that can hijack drag-to-select
-  // (and start chart drag instead). Stop these events at the panel boundary
-  // so text selection inside the panel works as expected.
+  // TradingView attaches global mouse handlers that can hijack drag-to-select.
+  // Events propagate out of the shadow boundary unless stopped — handle at
+  // the host element so all panel + FAB interactions are insulated.
   for (const ev of ["mousedown", "mouseup", "mousemove", "click", "dblclick", "wheel"]) {
-    panel.addEventListener(ev, (e) => e.stopPropagation());
+    host.addEventListener(ev, (e) => e.stopPropagation());
   }
 
   const $ctx = panel.querySelector('[data-hal="ctx"]');
@@ -230,6 +275,7 @@
     renderMessages(history);
     selectedTimeframe = await loadTimeframe();
     $tf.value = selectedTimeframe;
+    await loadOrCreateSession();
     $input.focus();
   }
 
@@ -243,6 +289,7 @@
   $clear.addEventListener("click", () => {
     history = [];
     clearHistory();
+    rotateSession();
     renderMessages(history);
   });
   $tf.addEventListener("change", () => {
@@ -251,6 +298,18 @@
   });
 
   // ───────────── send ─────────────
+
+  let inflightController = null;
+
+  function setSendMode(mode) {
+    if (mode === "stop") {
+      $send.textContent = "Stop";
+      $send.classList.add("hal-stop");
+    } else {
+      $send.textContent = "Send";
+      $send.classList.remove("hal-stop");
+    }
+  }
 
   async function send() {
     const text = $input.value.trim();
@@ -266,7 +325,8 @@
     }
     $input.value = "";
     $input.style.height = "auto";
-    $send.disabled = true;
+    inflightController = new AbortController();
+    setSendMode("stop");
 
     appendMessage(history, "user", text);
     saveHistory(history);
@@ -281,13 +341,20 @@
     let assistantText = "";
     let sawDone = false;
     let streamErr = null;
+    let wasAborted = false;
     let metaPayload = null;
 
     try {
       const resp = await fetch(BACKEND, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, timeframe: selectedTimeframe, query: text }),
+        body: JSON.stringify({
+          symbol,
+          timeframe: selectedTimeframe,
+          query: text,
+          session_id: sessionId,
+        }),
+        signal: inflightController.signal,
       });
       if (!resp.ok) {
         thinking.remove();
@@ -342,7 +409,11 @@
         }
       }
     } catch (err) {
-      streamErr = `Could not reach backend at ${BACKEND}. Is uvicorn running? (${err.message})`;
+      if (err.name === "AbortError") {
+        wasAborted = true;
+      } else {
+        streamErr = `Could not reach backend at ${BACKEND}. Is uvicorn running? (${err.message})`;
+      }
     } finally {
       // Clean up thinking indicator if we never got a token.
       if (thinking.isConnected) thinking.remove();
@@ -350,6 +421,14 @@
       if (streamErr) {
         if (assistantBubble) assistantBubble.remove();
         appendMessage(history, "error", streamErr);
+      } else if (wasAborted) {
+        if (assistantBubble) {
+          assistantText += " (stopped)";
+          assistantBubble.textContent = assistantText;
+          history.push({ role: "assistant", text: assistantText, ts: Date.now() });
+        } else {
+          appendMessage(history, "error", "(stopped before any response)");
+        }
       } else if (assistantBubble) {
         if (!sawDone) {
           // Stream cut off mid-flight (e.g. backend killed). Flag it
@@ -365,16 +444,23 @@
         appendMessage(history, "error", "(no response)");
       }
       saveHistory(history);
-      $send.disabled = false;
+      inflightController = null;
+      setSendMode("send");
       $input.focus();
     }
   }
 
-  $send.addEventListener("click", send);
+  $send.addEventListener("click", () => {
+    if (inflightController) {
+      inflightController.abort();
+    } else {
+      send();
+    }
+  });
   $input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      send();
+      if (!inflightController) send();
     }
   });
   $input.addEventListener("input", () => {
@@ -404,6 +490,7 @@
       renderMessages(history);
       selectedTimeframe = await loadTimeframe();
       $tf.value = selectedTimeframe;
+      await loadOrCreateSession();
     }
   }, 1500);
 

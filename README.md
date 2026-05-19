@@ -181,15 +181,15 @@ HAL/
 
 ## Status
 
-Phases 1–8 done. Detectors cover FVG, OB, structure (BOS/CHoCH), and
-liquidity sweeps. Streaming SSE end-to-end. OHLC cached. The panel
-exposes a "view detected features" expander under each answer.
+Phases 1–9 done. Detectors cover FVG, OB, structure (BOS/CHoCH), and
+liquidity sweeps. Streaming SSE end-to-end with per-session conversation
+memory (server-side, in-memory). OHLC cached. The panel runs inside a
+Shadow DOM, supports mid-stream abort, and exposes a "view detected
+features" expander under each answer. Pine highlighters in `pine/` mirror
+the Python detection for FVG and OB.
 
-Phase 9 (`plans/09_extension_polish.md`) is next: per-tab conversation
-memory, abort button, robust symbol detection, Pine Script visual rail,
-Shadow DOM.
-
-Architectural ideation lives under `plans/ideation/`.
+Post-v0 candidates live under `plans/ideation/` — journaling (SQLite,
+server-side history), launchd auto-start, brain-topology shifts.
 
 ## Tech
 
