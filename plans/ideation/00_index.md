@@ -16,6 +16,11 @@ plan itself.
 | `03_frontend_viz.md` | Extension internals (vanilla JS, panel widgets) and how chart visualization integrates | vanilla content.js, Path-1-only stance |
 | `04_process_topology.md` | Whether a Python backend should exist at all — alternatives: pure-extension, local daemon, cloud | the entire FastAPI process |
 | `05_undo_candidates.md` | Concrete pieces of current code most worth re-examining | inline list |
+| `06_detector_expansion.md` | Additive — what ICT detectors to add next (EQH/EQL, PD/OTE, PDH/PDL, killzones, breakers, IFVG) | nothing; pure addition |
+
+`06_detector_expansion.md` is the odd one out — it's *additive*, not an
+undo candidate. The current detection layer is healthy; this is the
+shortlist of where to extend it next.
 
 ## The single most important axis
 
