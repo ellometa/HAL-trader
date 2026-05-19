@@ -170,10 +170,17 @@
   `;
   shadow.appendChild(panel);
 
-  // TradingView attaches global mouse handlers that can hijack drag-to-select.
-  // Events propagate out of the shadow boundary unless stopped — handle at
-  // the host element so all panel + FAB interactions are insulated.
-  for (const ev of ["mousedown", "mouseup", "mousemove", "click", "dblclick", "wheel"]) {
+  // TradingView attaches global mouse + keyboard handlers (e.g. typing
+  // anywhere opens symbol search). Events propagate out of the shadow
+  // boundary unless stopped — handle at the host element so all panel +
+  // FAB interactions are insulated. Stopping at host doesn't break the
+  // input itself: the event still fires on the input first and only gets
+  // killed on the way out.
+  const stopEvents = [
+    "mousedown", "mouseup", "mousemove", "click", "dblclick", "wheel",
+    "keydown", "keypress", "keyup",
+  ];
+  for (const ev of stopEvents) {
     host.addEventListener(ev, (e) => e.stopPropagation());
   }
 
