@@ -17,10 +17,12 @@ plan itself.
 | `04_process_topology.md` | Whether a Python backend should exist at all — alternatives: pure-extension, local daemon, cloud | the entire FastAPI process |
 | `05_undo_candidates.md` | Concrete pieces of current code most worth re-examining | inline list |
 | `06_detector_expansion.md` | Additive — what ICT detectors to add next (EQH/EQL, PD/OTE, PDH/PDL, killzones, breakers, IFVG) | nothing; pure addition |
+| `07_autonomous_trading.md` | Could HAL trade itself — architectures, risk gating, staged path from paper to live, honest failure-mode catalog | the whole "copilot, not agent" stance |
 
-`06_detector_expansion.md` is the odd one out — it's *additive*, not an
-undo candidate. The current detection layer is healthy; this is the
-shortlist of where to extend it next.
+`06_detector_expansion.md` is *additive*, not an undo candidate.
+`07_autonomous_trading.md` is the opposite — the largest possible
+expansion of HAL's surface area and the one with the most asymmetric
+downside. Both are worth reading; neither ships without a real plan.
 
 ## The single most important axis
 
