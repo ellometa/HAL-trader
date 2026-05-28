@@ -90,6 +90,59 @@ def test_equity_tracks_unrealized_and_high_water_mark():
     assert b.high_water_mark == pytest.approx(10_020.0)
 
 
+_MGMT = {"breakeven_at_r": 1.0, "trail_at_r": 2.0, "trail_r": 1.0}
+
+
+def test_no_stop_move_before_breakeven_threshold():
+    b = _broker(slip=0.0, fee=0.0)
+    b.open_position(
+        symbol="BTCUSDT", side="long", qty=1.0, requested_price=100.0,
+        stop=90.0, take_profit=130.0, entry_time=T0, validity_bars=10, plan_id="p1",
+    )
+    # +0.5R only -> nothing moves
+    assert b.manage_stops("BTCUSDT", bar_high=105.0, bar_low=99.0, **_MGMT) is None
+    assert b.positions["BTCUSDT"].stop == pytest.approx(90.0)
+
+
+def test_breakeven_move_at_one_r_covers_costs():
+    b = _broker(slip=10.0, fee=10.0)
+    b.open_position(
+        symbol="BTCUSDT", side="long", qty=1.0, requested_price=100.0,
+        stop=90.0, take_profit=200.0, entry_time=T0, validity_bars=10, plan_id="p1",
+    )
+    entry = b.positions["BTCUSDT"].entry_price            # 100.1, R = 10.1
+    moved = b.manage_stops("BTCUSDT", bar_high=111.0, bar_low=100.0, **_MGMT)  # ~+1.08R
+    assert moved is not None and moved["kind"] == "breakeven"
+    # stop sits just ABOVE entry, so a stop-out here is a scratch, not a loss
+    assert b.positions["BTCUSDT"].stop > entry
+
+
+def test_trailing_locks_in_profit_and_only_tightens():
+    b = _broker(slip=0.0, fee=0.0)
+    b.open_position(
+        symbol="BTCUSDT", side="long", qty=1.0, requested_price=100.0,
+        stop=90.0, take_profit=500.0, entry_time=T0, validity_bars=10, plan_id="p1",
+    )  # entry 100, R = 10
+    moved = b.manage_stops("BTCUSDT", bar_high=130.0, bar_low=100.0, **_MGMT)  # +3R
+    assert moved["kind"] == "trail"
+    assert b.positions["BTCUSDT"].stop == pytest.approx(120.0)  # peak 130 - 1R(10)
+    # a weaker bar must never loosen the stop
+    assert b.manage_stops("BTCUSDT", bar_high=122.0, bar_low=118.0, **_MGMT) is None
+    assert b.positions["BTCUSDT"].stop == pytest.approx(120.0)
+
+
+def test_short_breakeven_moves_stop_down():
+    b = _broker(slip=0.0, fee=0.0)
+    b.open_position(
+        symbol="ETHUSDT", side="short", qty=1.0, requested_price=100.0,
+        stop=110.0, take_profit=40.0, entry_time=T0, validity_bars=10, plan_id="p1",
+    )  # entry 100, R = 10
+    moved = b.manage_stops("ETHUSDT", bar_high=100.0, bar_low=90.0, **_MGMT)  # +1R
+    assert moved["kind"] == "breakeven"
+    assert b.positions["ETHUSDT"].stop == pytest.approx(100.0)  # zero costs -> exactly entry
+    assert b.positions["ETHUSDT"].stop < 110.0                  # tightened from initial
+
+
 def test_close_at_market_settles_realized():
     b = _broker(slip=0.0, fee=0.0)
     b.open_position(

@@ -99,6 +99,25 @@ class Engine:
                 self.risk_state.record_realized(closed_trade.net_pnl)
                 exits.append(closed_trade.snapshot())
 
+        # --- 1b. manage the stop on the last CLOSED bar ----------------
+        # Ratchet the stop toward profit (breakeven, then trailing). Uses the
+        # same no-look-ahead gate as exits: never on the entry bar, and only
+        # closed-bar prices. The move takes effect for *subsequent* bars, so a
+        # favourable excursion observed now protects the trade next cycle.
+        stop_moves: list[dict[str, Any]] = []
+        mpos = self.broker.positions.get(symbol)
+        if mpos is not None and cfg.management.enabled and last_closed_time > mpos.entry_time:
+            moved = self.broker.manage_stops(
+                symbol,
+                float(last_closed["high"]),
+                float(last_closed["low"]),
+                breakeven_at_r=cfg.management.breakeven_at_r,
+                trail_at_r=cfg.management.trail_at_r,
+                trail_r=cfg.management.trail_r,
+            )
+            if moved is not None:
+                stop_moves.append(moved)
+
         # --- 2. equity + halt bookkeeping ------------------------------
         equity = self.broker.equity(self.last_prices)
         today = (live_time.to_pydatetime() if hasattr(live_time, "to_pydatetime") else live_time)
@@ -154,6 +173,7 @@ class Engine:
             "plan": plan.model_dump(),
             "execution": execution,
             "exits": exits,
+            "stop_moves": stop_moves,
             "risk_status": self.risk_state.status(),
             "prompt": {"system": system_prompt, "user": user_message},
         }

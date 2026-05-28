@@ -40,6 +40,16 @@ class FillConfig:
 
 
 @dataclass(frozen=True)
+class ManagementConfig:
+    """Active stop management. All thresholds are in R (multiples of the
+    trade's initial risk). Defaulted so older configs still load."""
+    enabled: bool = True
+    breakeven_at_r: float = 1.0   # move stop to cost-covered breakeven at +1R
+    trail_at_r: float = 2.0       # begin trailing once +2R is reached
+    trail_r: float = 1.0          # trail this many R behind the best price
+
+
+@dataclass(frozen=True)
 class LoopConfig:
     symbols: tuple[str, ...]
     timeframe: str
@@ -56,6 +66,7 @@ class TraderConfig:
     risk: RiskConfig
     fills: FillConfig
     loop: LoopConfig
+    management: ManagementConfig
 
 
 def load_config(path: Path | None = None) -> TraderConfig:
@@ -69,6 +80,7 @@ def load_config(path: Path | None = None) -> TraderConfig:
 
     risk = RiskConfig(**raw["risk"])
     fills = FillConfig(**raw["fills"])
+    management = ManagementConfig(**raw.get("management", {}))
     loop_raw = dict(raw["loop"])
     loop = LoopConfig(
         symbols=tuple(loop_raw.pop("symbols")),
@@ -81,4 +93,5 @@ def load_config(path: Path | None = None) -> TraderConfig:
         risk=risk,
         fills=fills,
         loop=loop,
+        management=management,
     )

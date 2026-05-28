@@ -44,6 +44,11 @@ class Position:
     validity_bars: int
     plan_id: str
     entry_fee: float
+    # Stop management state. ``initial_stop`` is the R reference (never moves);
+    # ``stop`` is the *live* stop the broker checks and may ratchet toward
+    # profit. ``mfe_price`` is the best favourable price seen on closed bars.
+    initial_stop: float = 0.0
+    mfe_price: float = 0.0
 
     def unrealized(self, mark: float) -> float:
         if self.side == "long":
@@ -154,9 +159,78 @@ class PaperBroker:
             validity_bars=validity_bars,
             plan_id=plan_id,
             entry_fee=fee,
+            initial_stop=stop,
+            mfe_price=fill,
         )
         self.positions[symbol] = pos
         return pos
+
+    def _cost_buffer(self, price: float) -> float:
+        """Price cushion that covers a round-trip's frictions (entry+exit fee
+        plus stop slippage), so a 'breakeven' stop-out actually nets >= 0
+        rather than a small fee-shaped loss."""
+        return price * (2 * self.fee_bps + self.slippage_bps) / 1e4
+
+    def manage_stops(
+        self,
+        symbol: str,
+        bar_high: float,
+        bar_low: float,
+        *,
+        breakeven_at_r: float,
+        trail_at_r: float,
+        trail_r: float,
+    ) -> dict[str, Any] | None:
+        """Ratchet the live stop toward profit based on a *closed* bar.
+
+        Two moves, in order of priority: once the trade's favourable
+        excursion reaches ``breakeven_at_r`` R, the stop jumps to a
+        cost-covered breakeven; once it reaches ``trail_at_r`` R, the stop
+        trails ``trail_r`` R behind the best price seen. Stops only ever
+        tighten — never loosen — so this can only reduce risk. Returns a note
+        if the stop moved, else None. Call only on bars after entry (the
+        engine enforces the no-look-ahead gate)."""
+        pos = self.positions.get(symbol)
+        if pos is None:
+            return None
+
+        if pos.side == "long":
+            pos.mfe_price = max(pos.mfe_price, bar_high)
+            r = pos.entry_price - pos.initial_stop
+            if r <= 0:
+                return None
+            fav_r = (pos.mfe_price - pos.entry_price) / r
+            candidate, kind = pos.stop, None
+            if fav_r >= breakeven_at_r:
+                be = pos.entry_price + self._cost_buffer(pos.entry_price)
+                if be > candidate:
+                    candidate, kind = be, "breakeven"
+            if fav_r >= trail_at_r:
+                trail = pos.mfe_price - trail_r * r
+                if trail > candidate:
+                    candidate, kind = trail, "trail"
+            if candidate > pos.stop:
+                pos.stop = candidate
+                return {"symbol": symbol, "new_stop": candidate, "kind": kind, "fav_r": fav_r}
+        else:  # short — mirror
+            pos.mfe_price = min(pos.mfe_price, bar_low)
+            r = pos.initial_stop - pos.entry_price
+            if r <= 0:
+                return None
+            fav_r = (pos.entry_price - pos.mfe_price) / r
+            candidate, kind = pos.stop, None
+            if fav_r >= breakeven_at_r:
+                be = pos.entry_price - self._cost_buffer(pos.entry_price)
+                if be < candidate:
+                    candidate, kind = be, "breakeven"
+            if fav_r >= trail_at_r:
+                trail = pos.mfe_price + trail_r * r
+                if trail < candidate:
+                    candidate, kind = trail, "trail"
+            if candidate < pos.stop:
+                pos.stop = candidate
+                return {"symbol": symbol, "new_stop": candidate, "kind": kind, "fav_r": fav_r}
+        return None
 
     def _settle(
         self, pos: Position, exit_price: float, reason: ExitReason, exit_time: Any

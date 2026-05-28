@@ -31,6 +31,13 @@ max_entry_zone_mult = 1.0        # no-chase: max distance (in zone-heights) pric
 slippage_bps = 5.0               # 0.05% adverse slippage applied to every market fill
 fee_bps = 10.0                   # 0.10% taker fee charged per side
 
+[management]
+# Active stop management, measured in R (multiples of the initial risk).
+enabled = true
+breakeven_at_r = 1.0             # move the stop to a cost-covered breakeven at +1R
+trail_at_r = 2.0                 # start trailing once +2R is reached
+trail_r = 1.0                    # trail this many R behind the best price seen
+
 [loop]
 symbols = ["BTCUSDT", "ETHUSDT"]
 timeframe = "5m"
