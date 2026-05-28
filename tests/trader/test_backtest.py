@@ -25,7 +25,7 @@ _OB_ROWS = [
     (101, 106, 100, 105),  # 5
     (105, 106, 99, 100),   # 6  DOWN  <- bullish OB [99, 106]
     (100, 115, 99, 114),   # 7  BOS: close 114 > 110
-    (114, 116, 113, 115),  # 8  entry bar
+    (113, 114, 109, 110),  # 8  retrace into the no-chase band -> entry @110
     (100, 100, 80, 82),    # 9  pierces stop (low 80 < OB low 99)
     (82, 84, 81, 83),      # 10 tail / final forming bar
 ]

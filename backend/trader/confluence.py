@@ -38,6 +38,13 @@ _MAX_POINTS = W_ZONE + W_STRUCTURE + W_CHOCH + W_FVG + W_SWEEP + W_FRESH  # 10
 
 DEFAULT_RECENT_WINDOW = 20  # bars; what counts as "fresh" / "just swept"
 
+# No-chase guard: an entry is only valid if price is within this many zone
+# heights of the zone's near edge. The whole ICT idea is to enter *on a
+# return to the zone*, not to market-buy after price has already run away —
+# chasing makes the structural stop far, the reward:risk target unreachable,
+# and the trade times out. ``None`` disables the guard.
+DEFAULT_MAX_ENTRY_ZONE_MULT = 1.0
+
 
 @dataclass
 class Setup:
@@ -71,21 +78,40 @@ def _structure_bias(features: dict[str, list[dict[str, Any]]]) -> tuple[str | No
     return bias, t.startswith("choch"), f"structure:{len(structure) - 1}"
 
 
+def _near_zone(price: float, low: float, high: float, side: str, mult: float | None) -> bool:
+    """No-chase guard: is ``price`` close enough to the zone to enter?
+
+    For a long, price must not be more than ``mult`` zone-heights above the
+    zone's high; for a short, not more than ``mult`` below the zone's low.
+    ``mult=None`` disables the guard (any distance allowed)."""
+    if mult is None:
+        return True
+    height = max(high - low, 1e-9)
+    if side == "long":
+        return price <= high + mult * height
+    return price >= low - mult * height
+
+
 def _score_long(
     features: dict[str, list[dict[str, Any]]],
     current_price: float,
     *,
     n_bars: int,
     recent_window: int,
+    max_entry_zone_mult: float | None,
 ) -> Setup | None:
     obs = features.get("order_blocks", [])
     # Valid long zones: unmitigated bullish OBs sitting below price (support
-    # we can buy a retrace into). Tightest stop (highest low) ranks first as a
-    # tie-break, since closer support is a better reward:risk.
+    # we can buy a retrace into), and close enough that we're not chasing.
+    # Tightest stop (highest low) ranks first as a tie-break, since closer
+    # support is a better reward:risk.
     candidates = [
         (i, ob)
         for i, ob in enumerate(obs)
-        if ob["type"] == "ob_bullish" and not ob["mitigated"] and ob["price_low"] < current_price
+        if ob["type"] == "ob_bullish"
+        and not ob["mitigated"]
+        and ob["price_low"] < current_price
+        and _near_zone(current_price, ob["price_low"], ob["price_high"], "long", max_entry_zone_mult)
     ]
     if not candidates:
         return None
@@ -157,12 +183,16 @@ def _score_short(
     *,
     n_bars: int,
     recent_window: int,
+    max_entry_zone_mult: float | None,
 ) -> Setup | None:
     obs = features.get("order_blocks", [])
     candidates = [
         (i, ob)
         for i, ob in enumerate(obs)
-        if ob["type"] == "ob_bearish" and not ob["mitigated"] and ob["price_high"] > current_price
+        if ob["type"] == "ob_bearish"
+        and not ob["mitigated"]
+        and ob["price_high"] > current_price
+        and _near_zone(current_price, ob["price_low"], ob["price_high"], "short", max_entry_zone_mult)
     ]
     if not candidates:
         return None
@@ -233,15 +263,24 @@ def best_setup(
     n_bars: int,
     recent_window: int = DEFAULT_RECENT_WINDOW,
     min_score: float = 0.0,
+    max_entry_zone_mult: float | None = DEFAULT_MAX_ENTRY_ZONE_MULT,
 ) -> Setup | None:
     """Highest-confluence tradable setup at ``current_price``, or None.
 
     Evaluates both directions and returns the better-scoring one, provided it
-    clears ``min_score``. ``n_bars`` is the number of closed bars the features
-    were computed over — used only to judge recency, never to look ahead.
+    clears ``min_score`` and price is near enough to the zone not to be
+    chasing (``max_entry_zone_mult``). ``n_bars`` is the number of closed bars
+    the features were computed over — used only to judge recency, never to
+    look ahead.
     """
-    long = _score_long(features, current_price, n_bars=n_bars, recent_window=recent_window)
-    short = _score_short(features, current_price, n_bars=n_bars, recent_window=recent_window)
+    long = _score_long(
+        features, current_price, n_bars=n_bars, recent_window=recent_window,
+        max_entry_zone_mult=max_entry_zone_mult,
+    )
+    short = _score_short(
+        features, current_price, n_bars=n_bars, recent_window=recent_window,
+        max_entry_zone_mult=max_entry_zone_mult,
+    )
 
     best = max(
         (s for s in (long, short) if s is not None),
@@ -268,9 +307,15 @@ def score_for_refs(
     direction is weak, the trade is weak. Returns 0.0 if there's no valid zone.
     """
     if side == "long":
-        s = _score_long(features, current_price, n_bars=n_bars, recent_window=recent_window)
+        s = _score_long(
+            features, current_price, n_bars=n_bars, recent_window=recent_window,
+            max_entry_zone_mult=None,  # validator scores the setup, not its entry timing
+        )
     elif side == "short":
-        s = _score_short(features, current_price, n_bars=n_bars, recent_window=recent_window)
+        s = _score_short(
+            features, current_price, n_bars=n_bars, recent_window=recent_window,
+            max_entry_zone_mult=None,
+        )
     else:
         return 0.0
     return s.score if s is not None else 0.0

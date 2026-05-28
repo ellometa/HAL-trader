@@ -184,7 +184,11 @@ def rule_plan(
         return TradePlan(action="wait", rationale="holding a position; exits are engine-managed")
 
     setup = best_setup(
-        features, current_price, n_bars=n_bars, min_score=risk.min_confluence
+        features,
+        current_price,
+        n_bars=n_bars,
+        min_score=risk.min_confluence,
+        max_entry_zone_mult=risk.max_entry_zone_mult,
     )
     if setup is None:
         return TradePlan(

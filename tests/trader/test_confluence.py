@@ -101,6 +101,25 @@ def test_stale_context_does_not_count_as_fresh():
     assert all("sweep" not in f for f in s.factors)
 
 
+def test_no_chase_guard_rejects_far_entries():
+    # OB [90, 95], zone height 5. With mult=1.0 the entry must be <= 100.
+    feats = _features(order_blocks=[_bull_ob(price_low=90.0, price_high=95.0)])
+    assert best_setup(feats, 100.0, n_bars=20, max_entry_zone_mult=1.0) is not None
+    # price ran to 130 -> chasing -> rejected even though the zone is real
+    assert best_setup(feats, 130.0, n_bars=20, max_entry_zone_mult=1.0) is None
+    # guard disabled -> the far entry is allowed again
+    assert best_setup(feats, 130.0, n_bars=20, max_entry_zone_mult=None) is not None
+
+
+def test_score_for_refs_ignores_entry_proximity():
+    # The validator gate scores the setup regardless of how far price has run.
+    feats = _features(
+        order_blocks=[_bull_ob(price_low=90.0, price_high=95.0)],
+        structure=[{"type": "bos_bullish", "swing_index": 10, "break_index": 15, "price": 99.0}],
+    )
+    assert score_for_refs(feats, 500.0, "long", n_bars=20) > 0.0
+
+
 def test_score_for_refs_matches_best_setup():
     feats = _features(
         order_blocks=[_bull_ob()],

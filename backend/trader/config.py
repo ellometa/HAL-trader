@@ -27,6 +27,10 @@ class RiskConfig:
     # (0..1) a setup must clear before any entry is allowed. Filters the
     # marginal, fee-churning trades. Defaulted so older configs still load.
     min_confluence: float = 0.5
+    # No-chase guard: max distance (in zone-heights) price may sit from the
+    # zone edge and still be a valid entry. Keeps stops tight and targets
+    # reachable. Defaulted so older configs still load.
+    max_entry_zone_mult: float = 1.0
 
 
 @dataclass(frozen=True)

@@ -62,7 +62,9 @@ def engine(tmp_path):
 
 
 def test_open_then_stop_out(engine, monkeypatch):
-    holder = {"df": _df(_OB_ROWS + [(114, 116, 113, 115)])}  # +1 forming bar
+    # Forming bar retraces toward the OB ([99,106]) so the entry isn't a chase:
+    # close 110 is inside the no-chase band (106 + 1.0*7 = 113).
+    holder = {"df": _df(_OB_ROWS + [(113, 114, 109, 110)])}  # +1 forming bar
 
     async def fake_fetch(symbol, timeframe, limit):
         return holder["df"].copy()
@@ -84,7 +86,7 @@ def test_open_then_stop_out(engine, monkeypatch):
     # bar), row 9 = stop bar (low 80 < stop 99), row 10 = new forming bar.
     holder["df"] = _df(
         _OB_ROWS
-        + [(114, 116, 113, 115), (100, 100, 80, 82), (82, 84, 81, 83)]
+        + [(113, 114, 109, 110), (100, 100, 80, 82), (82, 84, 81, 83)]
     )
     out2 = asyncio.run(engine.run_cycle("BTCUSDT"))
     assert "BTCUSDT" not in engine.broker.positions          # flat again
