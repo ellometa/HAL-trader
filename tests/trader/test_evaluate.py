@@ -52,6 +52,21 @@ def test_walk_forward_folds_are_independent_and_pooled_is_consistent():
     assert "WALK-FORWARD" in text and "POOLED" in text
     assert 0 <= report["folds_profitable"] <= report["folds_scored"]
 
+    # every scored fold carries a buy-and-hold benchmark, and the "beat B&H"
+    # tally is bounded by and consistent with the per-fold comparison.
+    scored = [f for f in report["fold_reports"] if f.get("return_pct") is not None]
+    assert all(f["buy_hold_return_pct"] is not None for f in scored)
+    assert 0 <= report["folds_beat_buyhold"] <= report["folds_scored"]
+    assert report["folds_beat_buyhold"] == sum(
+        1 for f in scored if f["return_pct"] > f["buy_hold_return_pct"]
+    )
+    assert "B&H" in text
+
+    # pooled calibration accounts for every trade exactly once — confidence is
+    # threaded through the folds, not silently dropped (the bug this guards).
+    by_conf = report["pooled_by_confidence"]
+    assert sum(d["n"] for d in by_conf.values()) == report["pooled_trades"]
+
 
 def test_tiny_history_skips_folds_gracefully():
     cfg = load_config()

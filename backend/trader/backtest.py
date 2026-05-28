@@ -103,6 +103,18 @@ async def run_backtest(
         trades = [t.snapshot() for t in broker.closed_trades]
         stats = metrics.compute_stats(trades, conf_by_plan)
 
+        # Buy-and-hold over the *same window the policy was active*: from the
+        # close at the first decision to the final close. This is the only
+        # honest yardstick — a strategy that nets +1% while the market ran +10%
+        # destroyed value, and a single return number hides that. ``None`` when
+        # there were no decisions (history too short to act).
+        buy_hold_return_pct: float | None = None
+        if n >= start:
+            entry_close = float(df["close"].iloc[start - 1])
+            exit_close = float(df["close"].iloc[n - 1])
+            if entry_close:
+                buy_hold_return_pct = exit_close / entry_close - 1.0
+
         final_equity = broker.equity({})  # flat now, so == realized_equity
         return {
             "symbol": symbol,
@@ -115,6 +127,10 @@ async def run_backtest(
             "return_pct": (final_equity / config.starting_equity - 1.0)
             if config.starting_equity
             else None,
+            "buy_hold_return_pct": buy_hold_return_pct,
+            # plan_id -> stated confidence, surfaced so callers (walk-forward)
+            # can pool calibration across folds instead of re-deriving it.
+            "conf_by_plan": conf_by_plan,
             "ending_open_positions": ending_open,
             "high_water_mark": broker.high_water_mark,
             "risk_status": risk_state.status(),

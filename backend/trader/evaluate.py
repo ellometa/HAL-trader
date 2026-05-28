@@ -48,6 +48,10 @@ async def walk_forward(
     fold_size = n // folds
     fold_reports: list[dict[str, Any]] = []
     all_trades: list[dict[str, Any]] = []
+    # plan_ids are unique per (symbol, entry-bar) and folds are disjoint time
+    # slices, so merging fold maps never collides — the pooled calibration sees
+    # every trade's stated confidence.
+    pooled_conf: dict[str, str] = {}
 
     for k in range(folds):
         lo = k * fold_size
@@ -66,11 +70,13 @@ async def walk_forward(
             warmup=warmup,
         )
         all_trades.extend(r["trades"])
+        pooled_conf.update(r["conf_by_plan"])
         fold_reports.append({
             "fold": k,
             "bars": r["bars"],
             "closed_trades": r["closed_trades"],
             "return_pct": r["return_pct"],
+            "buy_hold_return_pct": r["buy_hold_return_pct"],
             "net_pnl": r["net_pnl"],
             "win_rate": r["win_rate"],
             "profit_factor": r["profit_factor"],
@@ -78,7 +84,15 @@ async def walk_forward(
 
     scored = [f for f in fold_reports if "return_pct" in f and f["return_pct"] is not None]
     returns = [f["return_pct"] for f in scored]
-    pooled = metrics.compute_stats(all_trades, {})
+    # Per-fold alpha vs buy-and-hold: the number that actually says "did the
+    # policy earn its turnover, or just ride/fight the tape." A fold counts as
+    # a win only if it beat simply holding through the same bars.
+    bh = [f["buy_hold_return_pct"] for f in scored if f["buy_hold_return_pct"] is not None]
+    folds_beat_buyhold = sum(
+        1 for f in scored
+        if f["buy_hold_return_pct"] is not None and f["return_pct"] > f["buy_hold_return_pct"]
+    )
+    pooled = metrics.compute_stats(all_trades, pooled_conf)
 
     return {
         "symbol": symbol,
@@ -87,14 +101,20 @@ async def walk_forward(
         "folds": folds,
         "folds_scored": len(scored),
         "folds_profitable": sum(1 for r in returns if r > 0),
+        "folds_beat_buyhold": folds_beat_buyhold,
         "median_return_pct": median(returns) if returns else None,
         "mean_return_pct": (sum(returns) / len(returns)) if returns else None,
         "worst_return_pct": min(returns) if returns else None,
         "best_return_pct": max(returns) if returns else None,
+        "median_buyhold_pct": median(bh) if bh else None,
         "pooled_trades": pooled["closed_trades"],
         "pooled_net_pnl": pooled["net_pnl"],
         "pooled_win_rate": pooled["win_rate"],
         "pooled_profit_factor": pooled["profit_factor"],
+        # Out-of-sample calibration: does the confidence the policy stamped at
+        # entry actually predict wins? If "high" doesn't out-win "low", the
+        # confidence signal is noise (or worse, inverted) and can't be trusted.
+        "pooled_by_confidence": pooled["by_confidence"],
         "fold_reports": fold_reports,
     }
 
@@ -119,13 +139,19 @@ def format_walk_forward(report: dict[str, Any]) -> str:
         if "skipped" in f:
             L.append(f"  fold {f['fold']}   skipped ({f['skipped']})")
             continue
+        beat = "" if f.get("buy_hold_return_pct") is None else (
+            " win" if f["return_pct"] > f["buy_hold_return_pct"] else " lose"
+        )
         L.append(
             f"  fold {f['fold']}   {_pct(f['return_pct']):>8s}   "
             f"trades {f['closed_trades']:3d}   PF {_fnum(f['profit_factor'])}"
+            f"   vs B&H {_pct(f.get('buy_hold_return_pct')):>8s}{beat}"
         )
     L.append("-" * 60)
     L.append(f"folds profitable     {report['folds_profitable']}/{report['folds_scored']}")
-    L.append(f"median fold return   {_pct(report['median_return_pct'])}")
+    L.append(f"folds beat buy&hold  {report['folds_beat_buyhold']}/{report['folds_scored']}")
+    L.append(f"median fold return   {_pct(report['median_return_pct'])}"
+             f"   (buy&hold {_pct(report['median_buyhold_pct'])})")
     L.append(f"return spread        {_pct(report['worst_return_pct'])} .. {_pct(report['best_return_pct'])}")
     L.append("-" * 60)
     win = report["pooled_win_rate"]
@@ -136,5 +162,15 @@ def format_walk_forward(report: dict[str, Any]) -> str:
         f"win {win_str}   "
         f"PF {_fnum(report['pooled_profit_factor'])}"
     )
+    by_conf = report.get("pooled_by_confidence") or {}
+    if any(by_conf.get(c, {}).get("n") for c in ("high", "medium", "low")):
+        L.append("-" * 60)
+        L.append("calibration (does stated confidence predict wins?):")
+        for conf in ("high", "medium", "low", "unknown"):
+            d = by_conf.get(conf)
+            if d and d["n"]:
+                wr = d["wins"] / d["n"]
+                L.append(f"  {conf:8s} n={d['n']:3d}   net {d['net']:+8.2f}   "
+                         f"win {wr * 100:.1f}%")
     L.append("=" * 60)
     return "\n".join(L)
