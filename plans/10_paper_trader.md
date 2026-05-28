@@ -18,12 +18,15 @@ backend/trader/
   broker.py      PaperBroker — simulated fills, slippage, fees, stop/TP resolution
   journal.py     append-only JSONL decision log
   brain.py       features -> TradePlan: Gemini structured output, or a rule baseline
-  engine.py      one cycle: fetch -> detect(closed bars) -> exits -> halt -> plan -> validate -> fill -> journal
+  engine.py      one decision: detect(closed bars) -> exits -> halt -> plan -> validate -> fill -> journal
+  backtest.py    replay the policy over history via the SAME engine.step the live loop uses
+  metrics.py     shared P&L math, so live-replay and backtest report identical numbers
   service.py     the long-running loop + kill switch + lifecycle
   api.py         /trader/* endpoints + a self-contained operator dashboard
 config/trader.toml   every risk cap and loop knob, in one auditable file
 scripts/replay_journal.py   weekly-review tool: net P&L after costs, by confidence, by direction
-tests/trader/        31 tests; every validator rejection path + every halt
+scripts/backtest.py         run the live policy against fetched history (rule or llm)
+tests/trader/        33 tests; every validator rejection path + every halt + backtest no-look-ahead
 ```
 
 ## The one rule that matters
@@ -100,8 +103,6 @@ change, not a rewrite.
   key. (Prohibited by design until the staged path says otherwise.)
 - No extension panel yet — the dashboard covers operation; the TradingView
   panel from doc 07 would consume the same `/trader/*` endpoints.
-- No backtest harness (doc 07 Phase C). `replay_journal.py` summarises what
-  *did* happen; it does not yet re-run the policy against history.
 
 ## Graduation criteria (unchanged from doc 07)
 

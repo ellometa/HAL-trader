@@ -57,8 +57,19 @@ class Engine:
         self.last_prices: dict[str, float] = {}
 
     async def run_cycle(self, symbol: str) -> dict[str, Any]:
+        """Live cycle: fetch the latest candles, then decide. The fetch is the
+        only thing that separates live from backtest — the decision logic in
+        ``step`` is shared, so a backtest exercises the exact same policy."""
         cfg = self.config
         df = await fetch_ohlc(symbol, cfg.loop.timeframe, cfg.loop.candles)
+        return await self.step(symbol, df)
+
+    async def step(self, symbol: str, df: Any) -> dict[str, Any]:
+        """One decision over a window of candles. ``df``'s last row is treated
+        as the forming bar (its close is 'now'); detection runs on the closed
+        bars before it. Backtest feeds successive windows; live feeds the live
+        fetch. Same code path either way."""
+        cfg = self.config
         if len(df) < 3:
             return {"symbol": symbol, "skipped": "not enough candles"}
 
