@@ -1,0 +1,37 @@
+# HAL paper-trader configuration.
+#
+# This file is the single source of truth for risk caps and loop behaviour.
+# Every value here is a safety boundary or an operational knob. Changing a
+# risk number is changing the bot's policy — treat edits like code changes.
+#
+# Note what is NOT here: there is no broker = "live" option. The only broker
+# is the simulator. Going live is a new module, not a config value. See
+# plans/ideation/07_autonomous_trading.md.
+
+[mode]
+policy = "llm"          # "llm" (model emits the plan) | "rule" (deterministic baseline)
+
+[account]
+starting_equity = 10000.0
+quote_currency = "USDT"
+
+[risk]
+# All percentages are fractions of *current equity* unless noted.
+max_position_pct = 0.25          # max notional opened in a single trade
+max_risk_pct = 0.01              # hard cap on loss-at-stop per trade (1% of equity)
+min_rr = 1.5                     # reject any plan with reward:risk below this
+max_open_positions = 3           # concurrency cap
+max_symbol_exposure_pct = 0.25   # one position per symbol in v0; this bounds it
+daily_loss_cap_pct = 0.03        # halt NEW entries for the day at -3% realized
+equity_floor_pct = 0.80          # PERMANENT halt below 80% of high-water mark
+
+[fills]
+slippage_bps = 5.0               # 0.05% adverse slippage applied to every market fill
+fee_bps = 10.0                   # 0.10% taker fee charged per side
+
+[loop]
+symbols = ["BTCUSDT", "ETHUSDT"]
+timeframe = "5m"
+interval_seconds = 60            # how often the decision loop wakes
+candles = 200                    # how many candles to fetch per cycle
+default_validity_bars = 12       # fallback time-stop if a plan omits one

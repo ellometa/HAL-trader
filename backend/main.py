@@ -26,6 +26,8 @@ from backend.config import GEMINI_API_KEY
 from backend.ict.detector import detect_all
 from backend.ohlc import TimeframeError, fetch_ohlc
 from backend.prompts import build_system_prompt, build_user_message
+from backend.trader.api import router as trader_router
+from backend.trader.service import init_service
 
 _NOTES_PATH = Path(__file__).parent / "notes.md"
 _MODEL = "gemini-2.5-flash"
@@ -100,10 +102,15 @@ async def lifespan(app: FastAPI):
     else:
         log.info("no notes.md found — using placeholder until phase 5 ingestion")
     _state.client = genai.Client(api_key=GEMINI_API_KEY)
+    # Build the paper-trader service now that notes + client exist. The
+    # decision loop does NOT auto-start — it waits for POST /trader/start so
+    # a process restart never silently resumes trading.
+    init_service(notes=_state.notes, client=_state.client)
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(trader_router)
 
 # CORS. MV3 content-script fetches use the *page's* origin, not the
 # extension's, so we need to allow tradingview.com explicitly in addition
