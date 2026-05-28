@@ -68,8 +68,16 @@ def validate_plan(
     open_symbols: set[str],
     symbol: str,
     risk: RiskConfig,
+    cost_bps: float = 0.0,
 ) -> ValidationResult:
-    """Validate and size a single plan. Never raises; rejection is data."""
+    """Validate and size a single plan. Never raises; rejection is data.
+
+    ``cost_bps`` is the round-trip friction (entry fee + exit fee + entry
+    slippage, in basis points of price) used to measure the reward:risk floor
+    *net of costs* rather than on paper. Default ``0.0`` makes the check purely
+    geometric — identical to having no cost model — so callers that don't model
+    fills are unaffected.
+    """
     # 'wait' is always safe. 'close_existing' is always safe (closing reduces
     # risk); the engine decides whether there's actually something to close.
     if plan.action in ("wait", "close_existing"):
@@ -105,13 +113,30 @@ def validate_plan(
         risk_dist = stop - entry
         reward_dist = entry - tp
 
-    # --- reward:risk floor (catches the '60% win rate, still lost' trap) ---
+    # --- reward:risk floor, measured NET OF COSTS --------------------------
+    # Catches the '60% win rate, still lost' trap *and* the subtler one the
+    # backtest exposed: a 2:1 plan whose target is so close that round-trip
+    # fees eat the edge. A win pays its costs (reward shrinks), a loss carries
+    # them too (risk grows); we hold the same min_rr bar against those honest
+    # numbers, not the paper ones. With cost_bps=0 this reduces to the plain
+    # geometric ratio.
+    cost = entry * cost_bps / 1e4
     if risk_dist <= 0:
         reasons.append("non-positive risk distance (stop on the wrong side of entry)")
     else:
-        rr = reward_dist / risk_dist
-        if rr < risk.min_rr:
-            reasons.append(f"reward:risk {rr:.2f} below floor {risk.min_rr}")
+        net_reward = reward_dist - cost
+        net_risk = risk_dist + cost
+        if net_reward <= 0:
+            reasons.append(
+                f"reward:risk after costs: target {reward_dist:.4f} does not clear "
+                f"round-trip cost {cost:.4f}"
+            )
+        else:
+            rr = net_reward / net_risk
+            if rr < risk.min_rr:
+                reasons.append(
+                    f"reward:risk {rr:.2f} (net of costs) below floor {risk.min_rr}"
+                )
 
     # --- concurrency + one-position-per-symbol ------------------------
     if symbol in open_symbols:

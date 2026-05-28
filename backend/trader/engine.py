@@ -221,6 +221,9 @@ class Engine:
             open_symbols=set(self.broker.positions.keys()),
             symbol=symbol,
             risk=self.config.risk,
+            # Same friction model the breakeven buffer uses: entry+exit fee plus
+            # entry slippage. Makes the R:R floor honest about costs.
+            cost_bps=2 * self.config.fills.fee_bps + self.config.fills.slippage_bps,
         )
         if not result.accepted:
             return {"executed": False, "validation": result.snapshot()}

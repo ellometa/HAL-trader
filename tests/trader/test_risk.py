@@ -95,6 +95,41 @@ def test_reward_risk_below_floor_rejected():
     assert any("reward:risk" in r for r in res.reasons)
 
 
+def test_cost_adjusted_rr_rejects_thin_target():
+    # Geometric rr = 2.0 (passes the paper floor of 1.5), but the target is so
+    # close that round-trip fees drag it under: cost=0.25, net rr = 1.75/1.25 =
+    # 1.4 < 1.5. The cost-blind check would have waved this through.
+    plan = TradePlan(
+        action="open_long", rationale="x", entry=100, stop=99, take_profit=102,
+        detector_refs=["order_blocks:0"],
+    )
+    res = _validate(plan, cost_bps=25.0)
+    assert not res.accepted
+    assert any("net of costs" in r for r in res.reasons)
+    # and with no cost model the very same plan is accepted
+    assert _validate(plan, cost_bps=0.0).accepted
+
+
+def test_target_not_clearing_costs_rejected():
+    # reward_dist 0.2 < round-trip cost 0.25 -> can't make money even when right
+    plan = TradePlan(
+        action="open_long", rationale="x", entry=100, stop=99.9, take_profit=100.2,
+        detector_refs=["order_blocks:0"],
+    )
+    res = _validate(plan, cost_bps=25.0)
+    assert not res.accepted
+    assert any("round-trip cost" in r for r in res.reasons)
+
+
+def test_wide_trade_clears_cost_adjusted_floor():
+    # risk 3, reward 6 -> net rr = 5.75/3.25 = 1.77 >= 1.5 even after costs
+    plan = TradePlan(
+        action="open_long", rationale="x", entry=100, stop=97, take_profit=106,
+        detector_refs=["order_blocks:0"],
+    )
+    assert _validate(plan, cost_bps=25.0).accepted
+
+
 def test_short_geometry_valid():
     plan = TradePlan(
         action="open_short", rationale="x", entry=100, stop=110, take_profit=70,
