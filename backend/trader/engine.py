@@ -17,7 +17,6 @@ every yes/no comes from ``risk`` and every fill from the ``PaperBroker``.
 from __future__ import annotations
 
 import logging
-import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -229,7 +228,12 @@ class Engine:
         # Market fill at the live price; stop/target come from the validated
         # plan. (v0 simplification: we do not honour the model's exact entry
         # level — a market order fills at market. Documented in engine docstring.)
-        plan_id = f"{symbol}-{int(time.time())}"
+        # plan_id keys off the *bar* timestamp, not wall-clock: a backtest runs
+        # many decisions inside one real second, so int(time.time()) collided
+        # and corrupted the confidence<->exit join. The bar time is unique per
+        # (symbol, decision) in both backtest and live, and deterministic.
+        entry_iso = live_time.isoformat() if hasattr(live_time, "isoformat") else str(live_time)
+        plan_id = f"{symbol}-{entry_iso}"
         self.broker.open_position(
             symbol=symbol,
             side=result.side,  # type: ignore[arg-type]
