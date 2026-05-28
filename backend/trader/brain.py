@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from backend.trader.confluence import best_setup
 from backend.trader.config import RiskConfig
 from backend.trader.plan import TradePlan
 from backend.trader.risk import catalog_refs
@@ -147,16 +148,14 @@ async def llm_plan(
 # --------------------------------------------------------------------------
 # Deterministic rule policy (no API)
 # --------------------------------------------------------------------------
-def _last_structure_bias(features: dict[str, list[dict[str, Any]]]) -> str | None:
-    structure = features.get("structure", [])
-    if not structure:
-        return None
-    last = structure[-1]["type"]
-    if last.endswith("bullish"):
-        return "bullish"
-    if last.endswith("bearish"):
-        return "bearish"
-    return None
+def _confidence_for(score: float) -> str:
+    """Map a confluence score to a stated confidence, so the rule policy's
+    confidence means something the calibration report can check."""
+    if score >= 0.8:
+        return "high"
+    if score >= 0.6:
+        return "medium"
+    return "low"
 
 
 def rule_plan(
@@ -166,56 +165,50 @@ def rule_plan(
     risk: RiskConfig,
     position_side: str | None,
     validity_bars: int,
+    n_bars: int,
 ) -> TradePlan:
-    """Phase-A baseline: trade a fresh, unmitigated order block in the
-    direction of the most recent structure break. No model involved."""
-    bias = _last_structure_bias(features)
+    """Baseline policy: take the single highest-confluence setup available,
+    but only if it clears the configured quality gate. No model involved.
 
-    # Discretionary exit: if we hold a position and structure has flipped
-    # against it, close. (Stops/targets/time-stops are handled by the engine.)
-    if position_side == "long" and bias == "bearish":
-        return TradePlan(action="close_existing", rationale="structure flipped bearish against long")
-    if position_side == "short" and bias == "bullish":
-        return TradePlan(action="close_existing", rationale="structure flipped bullish against short")
+    Two deliberate changes from the naive v0 baseline, both backed by the
+    first backtest: (1) entries are chosen and gated by ``confluence`` rather
+    than "first OB in the trend direction", which cuts marginal, fee-churning
+    trades; (2) there is NO discretionary close on a structure flip — that
+    logic was the single largest loss bucket in the backtest (it dumped
+    positions mid-retrace near lows). Exits are left to the deterministic
+    stop / target / time-stop the engine already enforces.
+    """
+    # One position per symbol: while holding, do nothing and let the
+    # engine-side exits manage the trade.
     if position_side is not None:
-        return TradePlan(action="wait", rationale="already in a position; no flip signal")
+        return TradePlan(action="wait", rationale="holding a position; exits are engine-managed")
 
-    obs = features.get("order_blocks", [])
+    setup = best_setup(
+        features, current_price, n_bars=n_bars, min_score=risk.min_confluence
+    )
+    if setup is None:
+        return TradePlan(
+            action="wait",
+            rationale=f"no setup clears the confluence gate ({risk.min_confluence:.2f})",
+        )
+
     rr = max(risk.min_rr, 2.0)
+    if setup.side == "long":
+        tp = setup.entry + rr * (setup.entry - setup.stop)
+        action = "open_long"
+    else:
+        tp = setup.entry - rr * (setup.stop - setup.entry)
+        action = "open_short"
 
-    if bias == "bullish":
-        for i, ob in enumerate(obs):
-            if ob["type"] == "ob_bullish" and not ob["mitigated"] and ob["price_low"] < current_price:
-                entry = current_price
-                stop = ob["price_low"]
-                if stop >= entry:
-                    continue
-                tp = entry + rr * (entry - stop)
-                return TradePlan(
-                    action="open_long",
-                    rationale="bullish BOS with a fresh unmitigated bullish OB below price",
-                    entry=entry, stop=stop, take_profit=tp,
-                    size_pct_equity=risk.max_position_pct,
-                    validity_bars=validity_bars,
-                    confidence="medium",
-                    detector_refs=[f"order_blocks:{i}"],
-                )
-    elif bias == "bearish":
-        for i, ob in enumerate(obs):
-            if ob["type"] == "ob_bearish" and not ob["mitigated"] and ob["price_high"] > current_price:
-                entry = current_price
-                stop = ob["price_high"]
-                if stop <= entry:
-                    continue
-                tp = entry - rr * (stop - entry)
-                return TradePlan(
-                    action="open_short",
-                    rationale="bearish BOS with a fresh unmitigated bearish OB above price",
-                    entry=entry, stop=stop, take_profit=tp,
-                    size_pct_equity=risk.max_position_pct,
-                    validity_bars=validity_bars,
-                    confidence="medium",
-                    detector_refs=[f"order_blocks:{i}"],
-                )
-
-    return TradePlan(action="wait", rationale="no qualifying order block in the direction of structure")
+    rationale = f"confluence {setup.score:.2f}: " + "; ".join(setup.factors)
+    return TradePlan(
+        action=action,
+        rationale=rationale,
+        entry=setup.entry,
+        stop=setup.stop,
+        take_profit=tp,
+        size_pct_equity=risk.max_position_pct,
+        validity_bars=validity_bars,
+        confidence=_confidence_for(setup.score),
+        detector_refs=setup.detector_refs,
+    )

@@ -23,6 +23,10 @@ class RiskConfig:
     max_symbol_exposure_pct: float
     daily_loss_cap_pct: float
     equity_floor_pct: float
+    # Confluence quality gate: the minimum deterministic confluence score
+    # (0..1) a setup must clear before any entry is allowed. Filters the
+    # marginal, fee-churning trades. Defaulted so older configs still load.
+    min_confluence: float = 0.5
 
 
 @dataclass(frozen=True)

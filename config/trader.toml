@@ -24,6 +24,7 @@ max_open_positions = 3           # concurrency cap
 max_symbol_exposure_pct = 0.25   # one position per symbol in v0; this bounds it
 daily_loss_cap_pct = 0.03        # halt NEW entries for the day at -3% realized
 equity_floor_pct = 0.80          # PERMANENT halt below 80% of high-water mark
+min_confluence = 0.5             # reject entries below this deterministic confluence score (0..1)
 
 [fills]
 slippage_bps = 5.0               # 0.05% adverse slippage applied to every market fill

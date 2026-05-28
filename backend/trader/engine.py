@@ -122,6 +122,7 @@ class Engine:
                 risk=cfg.risk,
                 position_side=position_side,
                 validity_bars=cfg.loop.default_validity_bars,
+                n_bars=len(closed),
             )
             system_prompt = user_message = "(deterministic rule policy — no model call)"
         else:
