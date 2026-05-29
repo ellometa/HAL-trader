@@ -154,6 +154,8 @@ class Engine:
                 portfolio=portfolio,
                 notes=self.notes,
                 risk=cfg.risk,
+                cost_bps=2 * cfg.fills.fee_bps + cfg.fills.slippage_bps,
+                n_bars=len(closed),
             )
 
         # --- 4. act on the plan ----------------------------------------

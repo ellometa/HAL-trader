@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from backend.trader.confluence import best_setup
+from backend.trader.confluence import _MAX_POINTS, best_setup
 from backend.trader.config import RiskConfig
 from backend.trader.plan import TradePlan
 from backend.trader.risk import catalog_refs
@@ -31,6 +31,51 @@ from backend.trader.risk import catalog_refs
 # --------------------------------------------------------------------------
 # Prompt construction
 # --------------------------------------------------------------------------
+def _confluence_read(
+    features: dict[str, list[dict[str, Any]]],
+    current_price: float,
+    *,
+    risk: RiskConfig,
+    n_bars: int,
+) -> str:
+    """A plain-language summary of what the deterministic geometry scorer sees,
+    handed to the model as a strong prior. The model is the discretion layer on
+    top of this — it can adopt, tighten, or veto, but it can't out-argue the
+    geometry, and a direction the scorer rates below the floor will be rejected
+    downstream no matter what the model writes."""
+    gated = best_setup(
+        features, current_price, n_bars=n_bars,
+        min_score=risk.min_confluence, max_entry_zone_mult=risk.max_entry_zone_mult,
+    )
+    if gated is not None:
+        return (
+            f"The geometry scorer's pick: {gated.side.upper()} at ~{gated.entry:g}, "
+            f"structural stop {gated.stop:g}, confluence {gated.score:.2f} "
+            f"({gated.points}/{_MAX_POINTS} pts) — clears the {risk.min_confluence:.2f} "
+            f"floor.\n  factors: " + "; ".join(gated.factors) + "\n"
+            f"  refs: " + ", ".join(gated.detector_refs) + "\n"
+            "This is the trade the deterministic baseline would take. Adopt it, "
+            "tighten the stop/target, or WAIT with a reason — but a different "
+            "direction must still clear the same floor or it will be rejected."
+        )
+    top = best_setup(
+        features, current_price, n_bars=n_bars, min_score=0.0, max_entry_zone_mult=None,
+    )
+    if top is None:
+        return (
+            "The geometry scorer finds NO order-block zone to trade against right "
+            "now. The baseline WAITS. A trade here will fail the confluence floor — "
+            "strongly prefer wait."
+        )
+    return (
+        f"No setup clears the {risk.min_confluence:.2f} confluence floor. Best raw "
+        f"candidate: {top.side.upper()} confluence {top.score:.2f} "
+        f"({top.points}/{_MAX_POINTS} pts) — " + "; ".join(top.factors) + ".\n"
+        "The baseline WAITS, and any open_* here is likely to be rejected by the "
+        "floor. Only propose one with a specific, notes-grounded reason."
+    )
+
+
 def build_decision_prompt(
     *,
     symbol: str,
@@ -40,6 +85,8 @@ def build_decision_prompt(
     portfolio: dict[str, Any],
     notes: str,
     risk: RiskConfig,
+    cost_bps: float = 0.0,
+    n_bars: int = 0,
 ) -> tuple[str, str]:
     """Return (system_prompt, user_message) for the decision call."""
     refs = catalog_refs(features)
@@ -53,8 +100,14 @@ deterministic validator downstream, so do not bother emitting one):
   "Valid detector refs". Never invent a setup that isn't in the features.
 - An open_long needs stop < entry < take_profit. An open_short needs
   take_profit < entry < stop.
-- reward:risk must be at least {risk.min_rr}. Compute it from your own
-  entry/stop/take_profit before committing.
+- reward:risk must be at least {risk.min_rr}, and it is checked NET OF COSTS.
+  Round-trip friction is ~{cost_bps:g} bps of price (entry+exit fee plus entry
+  slippage), so a target only a few bps past entry is rejected even if it looks
+  like 2:1 on paper. Give the trade enough room to clear its own costs.
+- The proposed direction must clear a deterministic confluence floor of
+  {risk.min_confluence:.2f} (0..1). Citing real refs is NOT enough — if the
+  geometry on your side scores below the floor, the trade is rejected. The
+  "Deterministic confluence read" below tells you exactly where you stand.
 - Risk per trade is capped server-side at {risk.max_risk_pct:.0%} of equity
   and position size at {risk.max_position_pct:.0%}. Your size_pct_equity is a
   request that will be clamped; never assume you got the size you asked for.
@@ -75,6 +128,7 @@ When notes and generic ICT disagree, the notes win.
         f"Current price: {current_price}\n"
         f"(All feature timestamps are UTC ISO 8601. Indices refer to closed candles.)\n\n"
         f"Account state:\n{json.dumps(portfolio, indent=2, default=str)}\n\n"
+        f"Deterministic confluence read:\n{_confluence_read(features, current_price, risk=risk, n_bars=n_bars)}\n\n"
         f"Valid detector refs (cite ONLY these in detector_refs):\n{refs}\n\n"
         f"Detected features:\n{json.dumps(features, indent=2, default=str)}\n\n"
         f"Emit one TradePlan for {symbol} now."
@@ -121,6 +175,8 @@ async def llm_plan(
     portfolio: dict[str, Any],
     notes: str,
     risk: RiskConfig,
+    cost_bps: float = 0.0,
+    n_bars: int = 0,
 ) -> tuple[TradePlan, str, str]:
     """Return (plan, system_prompt, user_message). The prompts are returned
     so the engine can snapshot them into the journal verbatim."""
@@ -132,6 +188,8 @@ async def llm_plan(
         portfolio=portfolio,
         notes=notes,
         risk=risk,
+        cost_bps=cost_bps,
+        n_bars=n_bars,
     )
     raw = await _generate_plan_json(client, model, system, user)
     try:
