@@ -157,7 +157,9 @@ class Engine:
             )
 
         # --- 4. act on the plan ----------------------------------------
-        execution = await self._execute(symbol, plan, features, equity, current_price, live_time)
+        execution = await self._execute(
+            symbol, plan, features, equity, current_price, live_time, n_bars=len(closed)
+        )
 
         # --- 5. journal everything -------------------------------------
         record = {
@@ -194,6 +196,8 @@ class Engine:
         equity: float,
         current_price: float,
         live_time: Any,
+        *,
+        n_bars: int = 0,
     ) -> dict[str, Any]:
         # Discretionary close requested by the policy.
         if plan.action == "close_existing":
@@ -224,6 +228,10 @@ class Engine:
             # Same friction model the breakeven buffer uses: entry+exit fee plus
             # entry slippage. Makes the R:R floor honest about costs.
             cost_bps=2 * self.config.fills.fee_bps + self.config.fills.slippage_bps,
+            # Enable the confluence floor: the proposed direction must clear the
+            # same deterministic quality bar the rule baseline does.
+            current_price=current_price,
+            n_bars=n_bars,
         )
         if not result.accepted:
             return {"executed": False, "validation": result.snapshot()}

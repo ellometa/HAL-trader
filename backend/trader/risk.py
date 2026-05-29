@@ -25,6 +25,7 @@ from datetime import date
 from typing import Any
 
 from backend.trader.config import RiskConfig
+from backend.trader.confluence import score_for_refs
 from backend.trader.plan import TradePlan
 
 
@@ -69,6 +70,8 @@ def validate_plan(
     symbol: str,
     risk: RiskConfig,
     cost_bps: float = 0.0,
+    current_price: float | None = None,
+    n_bars: int = 0,
 ) -> ValidationResult:
     """Validate and size a single plan. Never raises; rejection is data.
 
@@ -77,6 +80,14 @@ def validate_plan(
     *net of costs* rather than on paper. Default ``0.0`` makes the check purely
     geometric — identical to having no cost model — so callers that don't model
     fills are unaffected.
+
+    ``current_price`` + ``n_bars`` enable the *confluence floor*: the proposed
+    direction must itself be backed by enough deterministic confluence
+    (``risk.min_confluence``) at the live price, exactly the bar the rule
+    baseline must clear. This is the gate that makes the docstring promise true
+    — the model cannot take a trade the geometry layer rates as garbage. When
+    ``current_price`` is ``None`` (no live price supplied) the floor is skipped,
+    so pure-invariant callers and unit tests are unaffected.
     """
     # 'wait' is always safe. 'close_existing' is always safe (closing reduces
     # risk); the engine decides whether there's actually something to close.
@@ -137,6 +148,19 @@ def validate_plan(
                 reasons.append(
                     f"reward:risk {rr:.2f} (net of costs) below floor {risk.min_rr}"
                 )
+
+    # --- confluence floor: the geometry must actually back this direction --
+    # The same quality bar the rule baseline clears, now applied to ANY plan
+    # (the LLM's included). The model can cite real refs and still be proposing
+    # a trade with no structural confluence; this rejects it. Skipped when no
+    # live price is supplied (pure-invariant callers / unit tests).
+    if current_price is not None:
+        conf = score_for_refs(features, current_price, side, n_bars=n_bars)
+        if conf < risk.min_confluence:
+            reasons.append(
+                f"confluence {conf:.2f} below the {risk.min_confluence:.2f} "
+                f"floor for a {side} setup here"
+            )
 
     # --- concurrency + one-position-per-symbol ------------------------
     if symbol in open_symbols:

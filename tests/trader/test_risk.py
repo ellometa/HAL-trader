@@ -130,6 +130,62 @@ def test_wide_trade_clears_cost_adjusted_floor():
     assert _validate(plan, cost_bps=25.0).accepted
 
 
+# --- confluence floor (the gate that also binds the LLM) ----------------
+def _bull_ob(price_low=90.0, price_high=95.0, end_index=18, mitigated=False):
+    return {
+        "type": "ob_bullish", "start_index": end_index - 1, "end_index": end_index,
+        "price_low": price_low, "price_high": price_high, "mitigated": mitigated,
+        "meta": {"bos_index": end_index},
+    }
+
+
+def _geom_feats(**kw):
+    base = {"order_blocks": [], "fvgs": [], "structure": [], "liquidity_sweeps": []}
+    base.update(kw)
+    return base
+
+
+def test_confluence_floor_rejects_structurally_weak_plan():
+    # A clean 1.5:1 long, valid ref — but a bare order block only scores 0.3,
+    # under the 0.5 floor. Geometry alone is not a setup.
+    feats = _geom_feats(order_blocks=[_bull_ob()])
+    plan = TradePlan(
+        action="open_long", rationale="x", entry=100, stop=90, take_profit=115,
+        detector_refs=["order_blocks:0"],
+    )
+    res = validate_plan(
+        plan, feats, equity=10_000.0, open_symbols=set(), symbol="BTCUSDT",
+        risk=RISK, current_price=100.0, n_bars=20,
+    )
+    assert not res.accepted
+    assert any("confluence" in r and "floor" in r for r in res.reasons)
+    # and with no live price supplied the floor is skipped (pure-invariant mode)
+    res_noprice = validate_plan(
+        plan, feats, equity=10_000.0, open_symbols=set(), symbol="BTCUSDT", risk=RISK,
+    )
+    assert res_noprice.accepted
+
+
+def test_confluence_floor_passes_full_stack():
+    feats = _geom_feats(
+        order_blocks=[_bull_ob()],
+        structure=[{"type": "choch_bullish", "swing_index": 10, "break_index": 15, "price": 99.0}],
+        fvgs=[{"type": "fvg_bullish", "start_index": 16, "end_index": 18,
+               "price_low": 92.0, "price_high": 96.0, "mitigated": False, "meta": {}}],
+        liquidity_sweeps=[{"type": "sweep_bullish", "swing_index": 12, "sweep_index": 17,
+                           "level": 89.0, "wick": 88.0, "close": 91.0, "meta": {}}],
+    )
+    plan = TradePlan(
+        action="open_long", rationale="x", entry=100, stop=90, take_profit=115,
+        detector_refs=["order_blocks:0"],
+    )
+    res = validate_plan(
+        plan, feats, equity=10_000.0, open_symbols=set(), symbol="BTCUSDT",
+        risk=RISK, current_price=100.0, n_bars=20,
+    )
+    assert res.accepted
+
+
 def test_short_geometry_valid():
     plan = TradePlan(
         action="open_short", rationale="x", entry=100, stop=110, take_profit=70,
