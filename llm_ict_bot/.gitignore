@@ -1,0 +1,5 @@
+runs/
+_shakedown.py
+_shakedown.log
+.ipynb_checkpoints/
+__pycache__/
