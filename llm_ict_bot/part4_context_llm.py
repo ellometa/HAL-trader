@@ -250,20 +250,28 @@ def ollama_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
     raise last_err
 
 
+_gemini_last_call = 0.0
+
 def gemini_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
     """Gemini API call with the same contract as `ollama_generate` (text in, text out).
     TEMPORARY EXCEPTION to the original local-only/no-paid-API spec — adopted for
     reasoning quality + speed on memory-constrained hardware; see the config cell.
     Pinned params + JSON response mime type; 429/5xx retried with backoff (free-tier
-    rate limits surface as 429s)."""
+    rate limits surface as 429s). Calls are spaced GEMINI_MIN_INTERVAL_S apart so a
+    free-tier run paces under the RPM cap instead of burning its capped retries."""
+    global _gemini_last_call
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not set — export it or set LLM_PROVIDER='ollama'")
+    wait = GEMINI_MIN_INTERVAL_S - (_time.time() - _gemini_last_call)
+    if wait > 0:
+        _time.sleep(wait)
     body = {"system_instruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {**GEMINI_PARAMS, "responseMimeType": "application/json"}}
     last_err: Exception = RuntimeError("unreachable")
     for attempt in range(4):
         try:
+            _gemini_last_call = _time.time()
             r = requests.post(GEMINI_URL, json=body, timeout=GEMINI_TIMEOUT,
                               headers={"x-goog-api-key": GEMINI_API_KEY})
             if r.status_code in (429, 500, 502, 503):

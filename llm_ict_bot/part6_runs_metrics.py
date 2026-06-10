@@ -48,7 +48,7 @@ if DO_REAL:
     _dec_ct = pd.DatetimeIndex(M_TF[DECISION_TF]["close_time"])
     _slots = int(((_dec_ct > BACKTEST_START) & (_dec_ct <= BACKTEST_END)
                   & in_ny_session(_dec_ct)).sum())
-    _per_call = 1.5 if LLM_PROVIDER == "gemini" else 40    # measured on this machine
+    _per_call = max(1.5, GEMINI_MIN_INTERVAL_S) if LLM_PROVIDER == "gemini" else 40
     print(f"market prepared in {_time.time() - _t0:.0f}s — {_slots:,} NY-session decision "
           f"slots in window (≈{_slots * _per_call / 3600:.1f}h of LLM compute at "
           f"~{_per_call:.0f}s/call via {LLM_MODEL_ID}, fewer while a position is open)")

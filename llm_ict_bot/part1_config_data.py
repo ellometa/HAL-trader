@@ -93,6 +93,9 @@ GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "") \
 GEMINI_URL       = ("https://generativelanguage.googleapis.com/v1beta/models/"
                     f"{GEMINI_MODEL}:generateContent")
 GEMINI_TIMEOUT   = 60
+# Client-side pacing: free tier allows ~15 req/min — spacing calls beats bouncing off
+# 429s (retries there are capped and an exhausted call is skipped). 0 on a paid key.
+GEMINI_MIN_INTERVAL_S = 4.1
 # Pinned Gemini generation params. Note: Gemini accepts a seed but does not guarantee
 # bit-identical replays across backend versions — the context-hash cache is what makes
 # this notebook reproducible end-to-end regardless of provider.
@@ -111,7 +114,10 @@ MAX_CONSEC_LOSSES = 5       # pause new entries for the rest of the day after N 
 # measured ~35-45s/call for local llama3.1:8b on this 16GB machine vs ~1-2s for the
 # Gemini API. Widen the window freely — the context-hash cache replays completed calls.
 BACKTEST_START   = pd.Timestamp("2026-02-01")   # LLM walk-forward window start (UTC)
-BACKTEST_END     = pd.Timestamp("2026-06-06")   # window end, EXCLUSIVE (store ends 2026-06-05)
+# One-month window for the free-tier Gemini run (~650 calls < 1,000 req/day quota).
+# Widen by restoring BACKTEST_END = 2026-06-06 — START stays anchored so February's
+# contexts hash identically and replay from cache. (END is EXCLUSIVE; store ends 06-05.)
+BACKTEST_END     = pd.Timestamp("2026-03-01")
 WF_FOLD_FREQ     = "MS"                         # walk-forward folds: month starts
 LIVE_FORWARD_DAYS = 3                           # live-forward mode replays the last N trading days
 

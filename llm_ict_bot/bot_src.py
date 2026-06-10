@@ -93,6 +93,9 @@ GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "") \
 GEMINI_URL       = ("https://generativelanguage.googleapis.com/v1beta/models/"
                     f"{GEMINI_MODEL}:generateContent")
 GEMINI_TIMEOUT   = 60
+# Client-side pacing: free tier allows ~15 req/min — spacing calls beats bouncing off
+# 429s (retries there are capped and an exhausted call is skipped). 0 on a paid key.
+GEMINI_MIN_INTERVAL_S = 4.1
 # Pinned Gemini generation params. Note: Gemini accepts a seed but does not guarantee
 # bit-identical replays across backend versions — the context-hash cache is what makes
 # this notebook reproducible end-to-end regardless of provider.
@@ -111,7 +114,10 @@ MAX_CONSEC_LOSSES = 5       # pause new entries for the rest of the day after N 
 # measured ~35-45s/call for local llama3.1:8b on this 16GB machine vs ~1-2s for the
 # Gemini API. Widen the window freely — the context-hash cache replays completed calls.
 BACKTEST_START   = pd.Timestamp("2026-02-01")   # LLM walk-forward window start (UTC)
-BACKTEST_END     = pd.Timestamp("2026-06-06")   # window end, EXCLUSIVE (store ends 2026-06-05)
+# One-month window for the free-tier Gemini run (~650 calls < 1,000 req/day quota).
+# Widen by restoring BACKTEST_END = 2026-06-06 — START stays anchored so February's
+# contexts hash identically and replay from cache. (END is EXCLUSIVE; store ends 06-05.)
+BACKTEST_END     = pd.Timestamp("2026-03-01")
 WF_FOLD_FREQ     = "MS"                         # walk-forward folds: month starts
 LIVE_FORWARD_DAYS = 3                           # live-forward mode replays the last N trading days
 
@@ -1081,20 +1087,28 @@ def ollama_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
     raise last_err
 
 
+_gemini_last_call = 0.0
+
 def gemini_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
     """Gemini API call with the same contract as `ollama_generate` (text in, text out).
     TEMPORARY EXCEPTION to the original local-only/no-paid-API spec — adopted for
     reasoning quality + speed on memory-constrained hardware; see the config cell.
     Pinned params + JSON response mime type; 429/5xx retried with backoff (free-tier
-    rate limits surface as 429s)."""
+    rate limits surface as 429s). Calls are spaced GEMINI_MIN_INTERVAL_S apart so a
+    free-tier run paces under the RPM cap instead of burning its capped retries."""
+    global _gemini_last_call
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not set — export it or set LLM_PROVIDER='ollama'")
+    wait = GEMINI_MIN_INTERVAL_S - (_time.time() - _gemini_last_call)
+    if wait > 0:
+        _time.sleep(wait)
     body = {"system_instruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {**GEMINI_PARAMS, "responseMimeType": "application/json"}}
     last_err: Exception = RuntimeError("unreachable")
     for attempt in range(4):
         try:
+            _gemini_last_call = _time.time()
             r = requests.post(GEMINI_URL, json=body, timeout=GEMINI_TIMEOUT,
                               headers={"x-goog-api-key": GEMINI_API_KEY})
             if r.status_code in (429, 500, 502, 503):
@@ -1791,7 +1805,7 @@ if DO_REAL:
     _dec_ct = pd.DatetimeIndex(M_TF[DECISION_TF]["close_time"])
     _slots = int(((_dec_ct > BACKTEST_START) & (_dec_ct <= BACKTEST_END)
                   & in_ny_session(_dec_ct)).sum())
-    _per_call = 1.5 if LLM_PROVIDER == "gemini" else 40    # measured on this machine
+    _per_call = max(1.5, GEMINI_MIN_INTERVAL_S) if LLM_PROVIDER == "gemini" else 40
     print(f"market prepared in {_time.time() - _t0:.0f}s — {_slots:,} NY-session decision "
           f"slots in window (≈{_slots * _per_call / 3600:.1f}h of LLM compute at "
           f"~{_per_call:.0f}s/call via {LLM_MODEL_ID}, fewer while a position is open)")
