@@ -207,6 +207,9 @@ _t0 = _time.time()
 smoke_raw = make_synthetic_1m(days=15, seed=11)
 smoke_1m, _ = drop_weekends(smoke_raw)
 sm_tf, sm_det = prepare_market(smoke_1m)
+# The assertions below exercise cold-start paths (retry, gate, parse); a smoke cache
+# left over from a previous run would replay everything and mask them — start cold.
+shutil.rmtree(CACHE_DIR / "smoke", ignore_errors=True)
 sm_cache = LLMCache(CACHE_DIR / "smoke")
 sm_logger = JsonlLogger(LOG_DIR / f"smoke_{RUN_ID}.jsonl")
 sm_decide = make_llm_decide_fn(sm_cache, sm_logger, generate_fn=MockLLM())
