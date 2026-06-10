@@ -78,11 +78,13 @@ FX_DAY_OFFSET    = "21h"                      # daily bars anchored 21:00 UTC (~
 # no paid APIs). "gemini" is a DOCUMENTED TEMPORARY EXCEPTION to that spec, adopted
 # because this 16GB machine sustains only ~35-45s per llama3.1:8b call (memory
 # pressure), making long windows impractical; reasoning quality was the priority.
-LLM_PROVIDER     = "gemini"                   # "gemini" | "ollama"
+# BOT_* env vars override per process, so parallel runs (e.g. a second Ollama box on
+# the LAN serving a different model) need no file edits — just a copied notebook.
+LLM_PROVIDER     = os.environ.get("BOT_LLM_PROVIDER", "ollama")   # "gemini" | "ollama"
 
-OLLAMA_MODEL     = "llama3.1:8b"
-OLLAMA_URL       = "http://localhost:11434/api/generate"
-OLLAMA_TIMEOUT   = 120                        # seconds per call
+OLLAMA_MODEL     = os.environ.get("BOT_OLLAMA_MODEL", "llama3.1:8b")
+OLLAMA_URL       = os.environ.get("BOT_OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_TIMEOUT   = 300                        # seconds per call (LAN box can be slow)
 # Reproducibility — pinned Ollama generation params
 OLLAMA_PARAMS    = {"temperature": 0, "top_p": 1, "seed": 42, "num_predict": 512}
 
