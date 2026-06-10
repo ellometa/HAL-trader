@@ -123,7 +123,7 @@ html = _REPORT_TMPL.render(
     run_id=RUN_ID, mode=RUN_MODE,
     start=str(RESULTS["llm_ict"]["curve"].index.min().date()),
     end=str(RESULTS["llm_ict"]["curve"].index.max().date()),
-    model=OLLAMA_MODEL, seed=OLLAMA_PARAMS["seed"], dec_tf=DECISION_TF,
+    model=LLM_MODEL_ID, seed=ACTIVE_LLM_PARAMS.get("seed"), dec_tf=DECISION_TF,
     spread=SPREAD_PIPS, risk=int(RISK_PCT * 100), rr=int(RR_TARGET), gate=CONF_THRESHOLD,
     verdict=VERDICT,
     summary_table=summary_df.to_html(),
@@ -158,7 +158,7 @@ print("=" * 78)
 print("LLM + ICT HYBRID PAPER BOT — RUN SUMMARY")
 print("=" * 78)
 print(f"mode {RUN_MODE} | window {BACKTEST_START.date()} → {BACKTEST_END.date()} | "
-      f"model {OLLAMA_MODEL} | smoke {'PASS' if cnt['fills'] >= 1 else '??'}")
+      f"model {LLM_MODEL_ID} | smoke {'PASS' if cnt['fills'] >= 1 else '??'}")
 print("-" * 78)
 print(summary_df.to_string())
 print("-" * 78)

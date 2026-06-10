@@ -162,8 +162,14 @@ print("context builder ready")
 #
 # The system prompt is an ICT primer distilled from the same researched sources as the
 # detectors, plus a strict output contract. Generation parameters are pinned
-# (temperature 0, fixed seed) and `format: "json"` is requested from Ollama, so a
-# given context string reproducibly maps to the same `TradePlan`.
+# (temperature 0, fixed seed) and JSON output is requested natively from the provider,
+# so a given context string reproducibly maps to the same `TradePlan`.
+#
+# **Provider note:** `LLM_PROVIDER` in the config selects local Ollama (the original
+# spec: local LLM, no internet, no paid APIs) or the Gemini API — a **documented
+# temporary exception** taken because this machine sustains only ~35-45s per local
+# 8B call, while reasoning quality was the priority. Both providers share the same
+# prompt, validator, cache and audit-log path, so results stay comparable.
 
 # %%
 SYSTEM_PROMPT = f"""You are a disciplined intraday EUR/USD trader using ICT (Inner Circle Trader) /
@@ -227,9 +233,11 @@ def ollama_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
     otherwise unloads it, costing a ~12s reload and the occasional dropped
     connection). Transient connection errors are retried with backoff — distinct
     from the validator's semantic retry."""
-    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "system": system,
-               "stream": False, "format": "json", "keep_alive": "60m",
-               "options": {**OLLAMA_PARAMS, "num_ctx": 8192}}
+    est_tokens = (len(system) + len(prompt)) // 3 + OLLAMA_PARAMS["num_predict"]
+    num_ctx = 4096 if est_tokens < 3800 else 8192      # smaller KV cache when it fits —
+    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "system": system,    # this is a
+               "stream": False, "format": "json", "keep_alive": "60m",       # 16GB machine
+               "options": {**OLLAMA_PARAMS, "num_ctx": num_ctx}}
     last_err: Exception = RuntimeError("unreachable")
     for attempt in range(3):
         try:
@@ -240,6 +248,42 @@ def ollama_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
             last_err = e
             _time.sleep(2 * (attempt + 1))
     raise last_err
+
+
+def gemini_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
+    """Gemini API call with the same contract as `ollama_generate` (text in, text out).
+    TEMPORARY EXCEPTION to the original local-only/no-paid-API spec — adopted for
+    reasoning quality + speed on memory-constrained hardware; see the config cell.
+    Pinned params + JSON response mime type; 429/5xx retried with backoff (free-tier
+    rate limits surface as 429s)."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not set — export it or set LLM_PROVIDER='ollama'")
+    body = {"system_instruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {**GEMINI_PARAMS, "responseMimeType": "application/json"}}
+    last_err: Exception = RuntimeError("unreachable")
+    for attempt in range(4):
+        try:
+            r = requests.post(GEMINI_URL, json=body, timeout=GEMINI_TIMEOUT,
+                              headers={"x-goog-api-key": GEMINI_API_KEY})
+            if r.status_code in (429, 500, 502, 503):
+                last_err = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+                _time.sleep(5 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            cands = r.json().get("candidates", [])
+            if not cands or "content" not in cands[0]:
+                raise RuntimeError(f"no candidates in response: {r.text[:200]}")
+            return "".join(p.get("text", "") for p in cands[0]["content"].get("parts", []))
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_err = e
+            _time.sleep(5 * (attempt + 1))
+    raise last_err
+
+
+DEFAULT_GENERATE: Callable[[str], str] = (
+    gemini_generate if LLM_PROVIDER == "gemini" else ollama_generate)
+ACTIVE_LLM_PARAMS = GEMINI_PARAMS if LLM_PROVIDER == "gemini" else OLLAMA_PARAMS
 
 
 def parse_trade_plan(text: str) -> tuple[Optional[TradePlan], str]:
@@ -275,7 +319,7 @@ def parse_trade_plan(text: str) -> tuple[Optional[TradePlan], str]:
         return None, f"bad field types: {e}"
     return plan, ""
 
-print("LLM layer ready —", OLLAMA_MODEL)
+print("LLM layer ready —", LLM_MODEL_ID)
 
 # %% [markdown]
 # ## 10 · Validator
@@ -338,7 +382,8 @@ class LLMCache:
 
     @staticmethod
     def key(context: str, system: str = SYSTEM_PROMPT) -> str:
-        blob = "|".join([OLLAMA_MODEL, json.dumps(OLLAMA_PARAMS, sort_keys=True), system, context])
+        blob = "|".join([LLM_MODEL_ID, json.dumps(ACTIVE_LLM_PARAMS, sort_keys=True),
+                         system, context])
         return hashlib.sha256(blob.encode()).hexdigest()
 
     def get(self, key: str) -> Optional[dict]:
@@ -366,10 +411,11 @@ class JsonlLogger:
 
 
 def llm_decide(context: str, price: float, cache: LLMCache, logger: JsonlLogger,
-               generate_fn: Callable[[str], str] = ollama_generate,
+               generate_fn: Optional[Callable[[str], str]] = None,
                decision_time=None) -> dict:
     """Cached, validated, retry-once LLM decision. Returns
     {plan, status, cache_hit, attempts, reject_reason}."""
+    generate_fn = generate_fn or DEFAULT_GENERATE
     key = cache.key(context)
     cached = cache.get(key)
     if cached is not None:

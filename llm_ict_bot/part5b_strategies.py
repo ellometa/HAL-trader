@@ -15,10 +15,10 @@
 
 # %%
 def make_llm_decide_fn(cache: LLMCache, logger: JsonlLogger,
-                       generate_fn: Callable[[str], str] = ollama_generate) -> Callable:
+                       generate_fn: Optional[Callable[[str], str]] = None) -> Callable:
     def decide(ctx_provider, price, t):
         return llm_decide(ctx_provider(), price, cache, logger,
-                          generate_fn=generate_fn, decision_time=t)
+                          generate_fn=generate_fn or DEFAULT_GENERATE, decision_time=t)
     return decide
 
 

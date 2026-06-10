@@ -1,10 +1,11 @@
 # %% [markdown]
 # ## 16 · Real-data runs
 #
-# Guards: the LLM walk-forward needs the real Parquet store **and** a reachable Ollama
-# server; the rule baseline and buy-and-hold need only the store. If something is
-# missing the notebook still completes — the reporting cells fall back to the smoke
-# results so every artifact below always renders.
+# Guards: the LLM walk-forward needs the real Parquet store **and** a ready LLM
+# provider (Gemini key or running Ollama, per `LLM_PROVIDER`); the rule baseline and
+# buy-and-hold need only the store. If something is missing the notebook still
+# completes — the reporting cells fall back to the smoke results so every artifact
+# below always renders.
 
 # %%
 def ollama_alive() -> bool:
@@ -15,10 +16,26 @@ def ollama_alive() -> bool:
     except requests.RequestException:
         return False
 
-OLLAMA_OK = ollama_alive()
+
+def llm_ready() -> bool:
+    """Provider-aware healthcheck: one real (cheap) generation must succeed."""
+    if LLM_PROVIDER == "ollama":
+        return ollama_alive()
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY is not set — export it (aistudio.google.com/apikey) "
+              "or set LLM_PROVIDER='ollama' in the config cell")
+        return False
+    try:
+        gemini_generate('Respond with exactly this JSON: {"ok": true}', system="echo test")
+        return True
+    except Exception as e:
+        print(f"Gemini healthcheck failed: {e!r}")
+        return False
+
+LLM_READY = llm_ready()
 DO_REAL = HAVE_REAL_DATA and not RUN_SMOKE_ONLY
-DO_LLM = DO_REAL and OLLAMA_OK
-print(f"real data: {HAVE_REAL_DATA} | ollama reachable w/ {OLLAMA_MODEL}: {OLLAMA_OK} "
+DO_LLM = DO_REAL and LLM_READY
+print(f"real data: {HAVE_REAL_DATA} | {LLM_MODEL_ID} ready: {LLM_READY} "
       f"| real runs: {DO_REAL} | LLM run: {DO_LLM}")
 
 # %%
@@ -31,9 +48,10 @@ if DO_REAL:
     _dec_ct = pd.DatetimeIndex(M_TF[DECISION_TF]["close_time"])
     _slots = int(((_dec_ct > BACKTEST_START) & (_dec_ct <= BACKTEST_END)
                   & in_ny_session(_dec_ct)).sum())
+    _per_call = 1.5 if LLM_PROVIDER == "gemini" else 40    # measured on this machine
     print(f"market prepared in {_time.time() - _t0:.0f}s — {_slots:,} NY-session decision "
-          f"slots in window (≈{_slots * 2 / 3600:.1f}h of LLM compute at ~2s/call, "
-          f"fewer while a position is open)")
+          f"slots in window (≈{_slots * _per_call / 3600:.1f}h of LLM compute at "
+          f"~{_per_call:.0f}s/call via {LLM_MODEL_ID}, fewer while a position is open)")
 
 # %% [markdown]
 # ### Rule-only ICT baseline + buy-and-hold (deterministic, fast)
@@ -53,15 +71,16 @@ else:
 # %% [markdown]
 # ### LLM walk-forward (the headline run)
 #
-# Every NY-session 15m close while flat → context → `llama3.1:8b` → validated plan.
-# Responses are cached by context hash, so re-running the notebook replays from disk.
-# Audit trail: `runs/logs/llm_calls_<run-id>.jsonl`.
+# Every NY-session 15m close while flat → context → the configured model
+# (`LLM_MODEL_ID`) → validated plan. Responses are cached by context hash, so
+# re-running the notebook replays from disk — widening the window later reuses
+# every completed call. Audit trail: `runs/logs/llm_calls_<run-id>.jsonl`.
 
 # %%
 if DO_LLM:
     llm_cache = LLMCache(CACHE_DIR / "real")
     llm_logger = JsonlLogger(LOG_DIR / f"llm_calls_{RUN_ID}.jsonl")
-    print(f"LLM walk-forward ({OLLAMA_MODEL}, temp 0, seed {OLLAMA_PARAMS['seed']}):")
+    print(f"LLM walk-forward ({LLM_MODEL_ID}, temp 0, seed {ACTIVE_LLM_PARAMS.get('seed')}):")
     _t0 = _time.time()
     RESULTS["llm_ict"] = run_walk_forward(
         clean_1m, M_TF, M_DET, make_llm_decide_fn(llm_cache, llm_logger), "llm_ict",
@@ -71,8 +90,8 @@ if DO_LLM:
           f"(cache {_c['cache_hits']:,}), orders {_c['orders']}, gated {_c['gated']}, "
           f"rejected {_c['validator_rejected']}, llm errors {_c['llm_errors']}")
 elif DO_REAL:
-    print("Ollama not reachable — LLM walk-forward skipped (set RUN_SMOKE_ONLY=False "
-          "and start `ollama serve` + `ollama pull llama3.1:8b` to enable)")
+    print(f"{LLM_MODEL_ID} not ready — LLM walk-forward skipped. For Gemini: export "
+          "GEMINI_API_KEY. For Ollama: start `ollama serve` and pull the model.")
     RESULTS["llm_ict"] = sm_res
 else:
     RESULTS["llm_ict"] = sm_res          # smoke stand-in so reporting always renders
@@ -95,7 +114,7 @@ if DO_REAL:
                          lf_start, lf_end, "rule_live_demo", verbose=True)
     print(f"demo finished — {len(lf_demo['trades'])} trade(s), "
           f"final equity ${lf_demo['final_equity']:,.0f}")
-    if RUN_MODE == "live_forward" and OLLAMA_OK:
+    if RUN_MODE == "live_forward" and LLM_READY:
         lf_start = lf_end - pd.Timedelta(days=LIVE_FORWARD_DAYS)
         print(f"\nLIVE-FORWARD LLM run ({lf_start.date()} → {lf_end.date()}):")
         RESULTS["llm_live"] = run_engine(

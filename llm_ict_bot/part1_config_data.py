@@ -17,9 +17,11 @@
 #
 # Priorities, in order: **correctness, leakage-safety, reproducibility** — then returns.
 #
-# Everything runs locally: pandas/numpy for data, Ollama (`llama3.1:8b`) for decisions.
+# The decision layer is provider-pluggable: local Ollama (`llama3.1:8b`) honors the
+# original local-only spec; the Gemini API is available as a **documented temporary
+# exception** for speed/reasoning on memory-constrained hardware (see config + §9).
 # A synthetic-data smoke test with a mock LLM runs first, so the notebook executes
-# end-to-end even with no Parquet store and no Ollama server.
+# end-to-end even with no Parquet store and no LLM provider at all.
 
 # %% [markdown]
 # ## 1 · Config
@@ -71,11 +73,29 @@ CONTEXT_TFS      = ["5min", "15min", "1h", "4h", "1d"]   # multi-timeframe conte
 FX_DAY_OFFSET    = "21h"                      # daily bars anchored 21:00 UTC (~5pm New York)
 
 # ----------------------------------------------------------------------------- LLM
+# Provider is pluggable. "ollama" honors the original spec (local LLM, no internet,
+# no paid APIs). "gemini" is a DOCUMENTED TEMPORARY EXCEPTION to that spec, adopted
+# because this 16GB machine sustains only ~35-45s per llama3.1:8b call (memory
+# pressure), making long windows impractical; reasoning quality was the priority.
+LLM_PROVIDER     = "gemini"                   # "gemini" | "ollama"
+
 OLLAMA_MODEL     = "llama3.1:8b"
 OLLAMA_URL       = "http://localhost:11434/api/generate"
 OLLAMA_TIMEOUT   = 120                        # seconds per call
 # Reproducibility — pinned Ollama generation params
 OLLAMA_PARAMS    = {"temperature": 0, "top_p": 1, "seed": 42, "num_predict": 512}
+
+GEMINI_MODEL     = "gemini-2.5-flash-lite"
+GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")      # export before running
+GEMINI_URL       = ("https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{GEMINI_MODEL}:generateContent")
+GEMINI_TIMEOUT   = 60
+# Pinned Gemini generation params. Note: Gemini accepts a seed but does not guarantee
+# bit-identical replays across backend versions — the context-hash cache is what makes
+# this notebook reproducible end-to-end regardless of provider.
+GEMINI_PARAMS    = {"temperature": 0, "topP": 1, "seed": 42, "maxOutputTokens": 1024}
+
+LLM_MODEL_ID     = f"{LLM_PROVIDER}:{GEMINI_MODEL if LLM_PROVIDER == 'gemini' else OLLAMA_MODEL}"
 
 # ----------------------------------------------------------------------------- risk circuit breakers
 DAILY_LOSS_LIMIT  = 0.03    # halt new entries for the day at -3% of start-of-day equity
@@ -84,9 +104,10 @@ MAX_CONSEC_LOSSES = 5       # pause new entries for the rest of the day after N 
 
 # ----------------------------------------------------------------------------- run window
 # The deterministic parts (cleaning, detectors, rule-only baseline) are cheap and can
-# cover the full store. Every LLM decision is a local ~1-3 s Ollama call, so the LLM
-# walk-forward window is bounded. Widen it here once a run is proven.
-BACKTEST_START   = pd.Timestamp("2025-06-01")   # LLM walk-forward window start (UTC)
+# cover the full store. The LLM walk-forward window is bounded by per-call latency:
+# measured ~35-45s/call for local llama3.1:8b on this 16GB machine vs ~1-2s for the
+# Gemini API. Widen the window freely — the context-hash cache replays completed calls.
+BACKTEST_START   = pd.Timestamp("2026-02-01")   # LLM walk-forward window start (UTC)
 BACKTEST_END     = pd.Timestamp("2026-06-06")   # window end, EXCLUSIVE (store ends 2026-06-05)
 WF_FOLD_FREQ     = "MS"                         # walk-forward folds: month starts
 LIVE_FORWARD_DAYS = 3                           # live-forward mode replays the last N trading days

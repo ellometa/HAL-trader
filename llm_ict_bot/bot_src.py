@@ -17,9 +17,11 @@
 #
 # Priorities, in order: **correctness, leakage-safety, reproducibility** — then returns.
 #
-# Everything runs locally: pandas/numpy for data, Ollama (`llama3.1:8b`) for decisions.
+# The decision layer is provider-pluggable: local Ollama (`llama3.1:8b`) honors the
+# original local-only spec; the Gemini API is available as a **documented temporary
+# exception** for speed/reasoning on memory-constrained hardware (see config + §9).
 # A synthetic-data smoke test with a mock LLM runs first, so the notebook executes
-# end-to-end even with no Parquet store and no Ollama server.
+# end-to-end even with no Parquet store and no LLM provider at all.
 
 # %% [markdown]
 # ## 1 · Config
@@ -71,11 +73,29 @@ CONTEXT_TFS      = ["5min", "15min", "1h", "4h", "1d"]   # multi-timeframe conte
 FX_DAY_OFFSET    = "21h"                      # daily bars anchored 21:00 UTC (~5pm New York)
 
 # ----------------------------------------------------------------------------- LLM
+# Provider is pluggable. "ollama" honors the original spec (local LLM, no internet,
+# no paid APIs). "gemini" is a DOCUMENTED TEMPORARY EXCEPTION to that spec, adopted
+# because this 16GB machine sustains only ~35-45s per llama3.1:8b call (memory
+# pressure), making long windows impractical; reasoning quality was the priority.
+LLM_PROVIDER     = "gemini"                   # "gemini" | "ollama"
+
 OLLAMA_MODEL     = "llama3.1:8b"
 OLLAMA_URL       = "http://localhost:11434/api/generate"
 OLLAMA_TIMEOUT   = 120                        # seconds per call
 # Reproducibility — pinned Ollama generation params
 OLLAMA_PARAMS    = {"temperature": 0, "top_p": 1, "seed": 42, "num_predict": 512}
+
+GEMINI_MODEL     = "gemini-2.5-flash-lite"
+GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")      # export before running
+GEMINI_URL       = ("https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{GEMINI_MODEL}:generateContent")
+GEMINI_TIMEOUT   = 60
+# Pinned Gemini generation params. Note: Gemini accepts a seed but does not guarantee
+# bit-identical replays across backend versions — the context-hash cache is what makes
+# this notebook reproducible end-to-end regardless of provider.
+GEMINI_PARAMS    = {"temperature": 0, "topP": 1, "seed": 42, "maxOutputTokens": 1024}
+
+LLM_MODEL_ID     = f"{LLM_PROVIDER}:{GEMINI_MODEL if LLM_PROVIDER == 'gemini' else OLLAMA_MODEL}"
 
 # ----------------------------------------------------------------------------- risk circuit breakers
 DAILY_LOSS_LIMIT  = 0.03    # halt new entries for the day at -3% of start-of-day equity
@@ -84,9 +104,10 @@ MAX_CONSEC_LOSSES = 5       # pause new entries for the rest of the day after N 
 
 # ----------------------------------------------------------------------------- run window
 # The deterministic parts (cleaning, detectors, rule-only baseline) are cheap and can
-# cover the full store. Every LLM decision is a local ~1-3 s Ollama call, so the LLM
-# walk-forward window is bounded. Widen it here once a run is proven.
-BACKTEST_START   = pd.Timestamp("2025-06-01")   # LLM walk-forward window start (UTC)
+# cover the full store. The LLM walk-forward window is bounded by per-call latency:
+# measured ~35-45s/call for local llama3.1:8b on this 16GB machine vs ~1-2s for the
+# Gemini API. Widen the window freely — the context-hash cache replays completed calls.
+BACKTEST_START   = pd.Timestamp("2026-02-01")   # LLM walk-forward window start (UTC)
 BACKTEST_END     = pd.Timestamp("2026-06-06")   # window end, EXCLUSIVE (store ends 2026-06-05)
 WF_FOLD_FREQ     = "MS"                         # walk-forward folds: month starts
 LIVE_FORWARD_DAYS = 3                           # live-forward mode replays the last N trading days
@@ -969,8 +990,14 @@ print("context builder ready")
 #
 # The system prompt is an ICT primer distilled from the same researched sources as the
 # detectors, plus a strict output contract. Generation parameters are pinned
-# (temperature 0, fixed seed) and `format: "json"` is requested from Ollama, so a
-# given context string reproducibly maps to the same `TradePlan`.
+# (temperature 0, fixed seed) and JSON output is requested natively from the provider,
+# so a given context string reproducibly maps to the same `TradePlan`.
+#
+# **Provider note:** `LLM_PROVIDER` in the config selects local Ollama (the original
+# spec: local LLM, no internet, no paid APIs) or the Gemini API — a **documented
+# temporary exception** taken because this machine sustains only ~35-45s per local
+# 8B call, while reasoning quality was the priority. Both providers share the same
+# prompt, validator, cache and audit-log path, so results stay comparable.
 
 # %%
 SYSTEM_PROMPT = f"""You are a disciplined intraday EUR/USD trader using ICT (Inner Circle Trader) /
@@ -1034,9 +1061,11 @@ def ollama_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
     otherwise unloads it, costing a ~12s reload and the occasional dropped
     connection). Transient connection errors are retried with backoff — distinct
     from the validator's semantic retry."""
-    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "system": system,
-               "stream": False, "format": "json", "keep_alive": "60m",
-               "options": {**OLLAMA_PARAMS, "num_ctx": 8192}}
+    est_tokens = (len(system) + len(prompt)) // 3 + OLLAMA_PARAMS["num_predict"]
+    num_ctx = 4096 if est_tokens < 3800 else 8192      # smaller KV cache when it fits —
+    payload = {"model": OLLAMA_MODEL, "prompt": prompt, "system": system,    # this is a
+               "stream": False, "format": "json", "keep_alive": "60m",       # 16GB machine
+               "options": {**OLLAMA_PARAMS, "num_ctx": num_ctx}}
     last_err: Exception = RuntimeError("unreachable")
     for attempt in range(3):
         try:
@@ -1047,6 +1076,42 @@ def ollama_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
             last_err = e
             _time.sleep(2 * (attempt + 1))
     raise last_err
+
+
+def gemini_generate(prompt: str, system: str = SYSTEM_PROMPT) -> str:
+    """Gemini API call with the same contract as `ollama_generate` (text in, text out).
+    TEMPORARY EXCEPTION to the original local-only/no-paid-API spec — adopted for
+    reasoning quality + speed on memory-constrained hardware; see the config cell.
+    Pinned params + JSON response mime type; 429/5xx retried with backoff (free-tier
+    rate limits surface as 429s)."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY not set — export it or set LLM_PROVIDER='ollama'")
+    body = {"system_instruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {**GEMINI_PARAMS, "responseMimeType": "application/json"}}
+    last_err: Exception = RuntimeError("unreachable")
+    for attempt in range(4):
+        try:
+            r = requests.post(GEMINI_URL, json=body, timeout=GEMINI_TIMEOUT,
+                              headers={"x-goog-api-key": GEMINI_API_KEY})
+            if r.status_code in (429, 500, 502, 503):
+                last_err = RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+                _time.sleep(5 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            cands = r.json().get("candidates", [])
+            if not cands or "content" not in cands[0]:
+                raise RuntimeError(f"no candidates in response: {r.text[:200]}")
+            return "".join(p.get("text", "") for p in cands[0]["content"].get("parts", []))
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last_err = e
+            _time.sleep(5 * (attempt + 1))
+    raise last_err
+
+
+DEFAULT_GENERATE: Callable[[str], str] = (
+    gemini_generate if LLM_PROVIDER == "gemini" else ollama_generate)
+ACTIVE_LLM_PARAMS = GEMINI_PARAMS if LLM_PROVIDER == "gemini" else OLLAMA_PARAMS
 
 
 def parse_trade_plan(text: str) -> tuple[Optional[TradePlan], str]:
@@ -1082,7 +1147,7 @@ def parse_trade_plan(text: str) -> tuple[Optional[TradePlan], str]:
         return None, f"bad field types: {e}"
     return plan, ""
 
-print("LLM layer ready —", OLLAMA_MODEL)
+print("LLM layer ready —", LLM_MODEL_ID)
 
 # %% [markdown]
 # ## 10 · Validator
@@ -1145,7 +1210,8 @@ class LLMCache:
 
     @staticmethod
     def key(context: str, system: str = SYSTEM_PROMPT) -> str:
-        blob = "|".join([OLLAMA_MODEL, json.dumps(OLLAMA_PARAMS, sort_keys=True), system, context])
+        blob = "|".join([LLM_MODEL_ID, json.dumps(ACTIVE_LLM_PARAMS, sort_keys=True),
+                         system, context])
         return hashlib.sha256(blob.encode()).hexdigest()
 
     def get(self, key: str) -> Optional[dict]:
@@ -1173,10 +1239,11 @@ class JsonlLogger:
 
 
 def llm_decide(context: str, price: float, cache: LLMCache, logger: JsonlLogger,
-               generate_fn: Callable[[str], str] = ollama_generate,
+               generate_fn: Optional[Callable[[str], str]] = None,
                decision_time=None) -> dict:
     """Cached, validated, retry-once LLM decision. Returns
     {plan, status, cache_hit, attempts, reject_reason}."""
+    generate_fn = generate_fn or DEFAULT_GENERATE
     key = cache.key(context)
     cached = cache.get(key)
     if cached is not None:
@@ -1449,10 +1516,10 @@ print("simulator ready")
 
 # %%
 def make_llm_decide_fn(cache: LLMCache, logger: JsonlLogger,
-                       generate_fn: Callable[[str], str] = ollama_generate) -> Callable:
+                       generate_fn: Optional[Callable[[str], str]] = None) -> Callable:
     def decide(ctx_provider, price, t):
         return llm_decide(ctx_provider(), price, cache, logger,
-                          generate_fn=generate_fn, decision_time=t)
+                          generate_fn=generate_fn or DEFAULT_GENERATE, decision_time=t)
     return decide
 
 
@@ -1673,10 +1740,11 @@ print(f"SMOKE OK in {_time.time() - _t0:.1f}s — consults {cnt['llm_consults']}
 # %% [markdown]
 # ## 16 · Real-data runs
 #
-# Guards: the LLM walk-forward needs the real Parquet store **and** a reachable Ollama
-# server; the rule baseline and buy-and-hold need only the store. If something is
-# missing the notebook still completes — the reporting cells fall back to the smoke
-# results so every artifact below always renders.
+# Guards: the LLM walk-forward needs the real Parquet store **and** a ready LLM
+# provider (Gemini key or running Ollama, per `LLM_PROVIDER`); the rule baseline and
+# buy-and-hold need only the store. If something is missing the notebook still
+# completes — the reporting cells fall back to the smoke results so every artifact
+# below always renders.
 
 # %%
 def ollama_alive() -> bool:
@@ -1687,10 +1755,26 @@ def ollama_alive() -> bool:
     except requests.RequestException:
         return False
 
-OLLAMA_OK = ollama_alive()
+
+def llm_ready() -> bool:
+    """Provider-aware healthcheck: one real (cheap) generation must succeed."""
+    if LLM_PROVIDER == "ollama":
+        return ollama_alive()
+    if not GEMINI_API_KEY:
+        print("GEMINI_API_KEY is not set — export it (aistudio.google.com/apikey) "
+              "or set LLM_PROVIDER='ollama' in the config cell")
+        return False
+    try:
+        gemini_generate('Respond with exactly this JSON: {"ok": true}', system="echo test")
+        return True
+    except Exception as e:
+        print(f"Gemini healthcheck failed: {e!r}")
+        return False
+
+LLM_READY = llm_ready()
 DO_REAL = HAVE_REAL_DATA and not RUN_SMOKE_ONLY
-DO_LLM = DO_REAL and OLLAMA_OK
-print(f"real data: {HAVE_REAL_DATA} | ollama reachable w/ {OLLAMA_MODEL}: {OLLAMA_OK} "
+DO_LLM = DO_REAL and LLM_READY
+print(f"real data: {HAVE_REAL_DATA} | {LLM_MODEL_ID} ready: {LLM_READY} "
       f"| real runs: {DO_REAL} | LLM run: {DO_LLM}")
 
 # %%
@@ -1703,9 +1787,10 @@ if DO_REAL:
     _dec_ct = pd.DatetimeIndex(M_TF[DECISION_TF]["close_time"])
     _slots = int(((_dec_ct > BACKTEST_START) & (_dec_ct <= BACKTEST_END)
                   & in_ny_session(_dec_ct)).sum())
+    _per_call = 1.5 if LLM_PROVIDER == "gemini" else 40    # measured on this machine
     print(f"market prepared in {_time.time() - _t0:.0f}s — {_slots:,} NY-session decision "
-          f"slots in window (≈{_slots * 2 / 3600:.1f}h of LLM compute at ~2s/call, "
-          f"fewer while a position is open)")
+          f"slots in window (≈{_slots * _per_call / 3600:.1f}h of LLM compute at "
+          f"~{_per_call:.0f}s/call via {LLM_MODEL_ID}, fewer while a position is open)")
 
 # %% [markdown]
 # ### Rule-only ICT baseline + buy-and-hold (deterministic, fast)
@@ -1725,15 +1810,16 @@ else:
 # %% [markdown]
 # ### LLM walk-forward (the headline run)
 #
-# Every NY-session 15m close while flat → context → `llama3.1:8b` → validated plan.
-# Responses are cached by context hash, so re-running the notebook replays from disk.
-# Audit trail: `runs/logs/llm_calls_<run-id>.jsonl`.
+# Every NY-session 15m close while flat → context → the configured model
+# (`LLM_MODEL_ID`) → validated plan. Responses are cached by context hash, so
+# re-running the notebook replays from disk — widening the window later reuses
+# every completed call. Audit trail: `runs/logs/llm_calls_<run-id>.jsonl`.
 
 # %%
 if DO_LLM:
     llm_cache = LLMCache(CACHE_DIR / "real")
     llm_logger = JsonlLogger(LOG_DIR / f"llm_calls_{RUN_ID}.jsonl")
-    print(f"LLM walk-forward ({OLLAMA_MODEL}, temp 0, seed {OLLAMA_PARAMS['seed']}):")
+    print(f"LLM walk-forward ({LLM_MODEL_ID}, temp 0, seed {ACTIVE_LLM_PARAMS.get('seed')}):")
     _t0 = _time.time()
     RESULTS["llm_ict"] = run_walk_forward(
         clean_1m, M_TF, M_DET, make_llm_decide_fn(llm_cache, llm_logger), "llm_ict",
@@ -1743,8 +1829,8 @@ if DO_LLM:
           f"(cache {_c['cache_hits']:,}), orders {_c['orders']}, gated {_c['gated']}, "
           f"rejected {_c['validator_rejected']}, llm errors {_c['llm_errors']}")
 elif DO_REAL:
-    print("Ollama not reachable — LLM walk-forward skipped (set RUN_SMOKE_ONLY=False "
-          "and start `ollama serve` + `ollama pull llama3.1:8b` to enable)")
+    print(f"{LLM_MODEL_ID} not ready — LLM walk-forward skipped. For Gemini: export "
+          "GEMINI_API_KEY. For Ollama: start `ollama serve` and pull the model.")
     RESULTS["llm_ict"] = sm_res
 else:
     RESULTS["llm_ict"] = sm_res          # smoke stand-in so reporting always renders
@@ -1767,7 +1853,7 @@ if DO_REAL:
                          lf_start, lf_end, "rule_live_demo", verbose=True)
     print(f"demo finished — {len(lf_demo['trades'])} trade(s), "
           f"final equity ${lf_demo['final_equity']:,.0f}")
-    if RUN_MODE == "live_forward" and OLLAMA_OK:
+    if RUN_MODE == "live_forward" and LLM_READY:
         lf_start = lf_end - pd.Timedelta(days=LIVE_FORWARD_DAYS)
         print(f"\nLIVE-FORWARD LLM run ({lf_start.date()} → {lf_end.date()}):")
         RESULTS["llm_live"] = run_engine(
@@ -1943,7 +2029,7 @@ html = _REPORT_TMPL.render(
     run_id=RUN_ID, mode=RUN_MODE,
     start=str(RESULTS["llm_ict"]["curve"].index.min().date()),
     end=str(RESULTS["llm_ict"]["curve"].index.max().date()),
-    model=OLLAMA_MODEL, seed=OLLAMA_PARAMS["seed"], dec_tf=DECISION_TF,
+    model=LLM_MODEL_ID, seed=ACTIVE_LLM_PARAMS.get("seed"), dec_tf=DECISION_TF,
     spread=SPREAD_PIPS, risk=int(RISK_PCT * 100), rr=int(RR_TARGET), gate=CONF_THRESHOLD,
     verdict=VERDICT,
     summary_table=summary_df.to_html(),
@@ -1978,7 +2064,7 @@ print("=" * 78)
 print("LLM + ICT HYBRID PAPER BOT — RUN SUMMARY")
 print("=" * 78)
 print(f"mode {RUN_MODE} | window {BACKTEST_START.date()} → {BACKTEST_END.date()} | "
-      f"model {OLLAMA_MODEL} | smoke {'PASS' if cnt['fills'] >= 1 else '??'}")
+      f"model {LLM_MODEL_ID} | smoke {'PASS' if cnt['fills'] >= 1 else '??'}")
 print("-" * 78)
 print(summary_df.to_string())
 print("-" * 78)
