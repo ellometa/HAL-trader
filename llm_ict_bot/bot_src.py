@@ -86,7 +86,10 @@ OLLAMA_TIMEOUT   = 120                        # seconds per call
 OLLAMA_PARAMS    = {"temperature": 0, "top_p": 1, "seed": 42, "num_predict": 512}
 
 GEMINI_MODEL     = "gemini-2.5-flash-lite"
-GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")      # export before running
+# Key sources, in order: env var, then a git-ignored `.gemini_key` file next to the
+# notebook (so the key never has to appear in shell history or the repo).
+GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "") \
+    or (Path(".gemini_key").read_text().strip() if Path(".gemini_key").exists() else "")
 GEMINI_URL       = ("https://generativelanguage.googleapis.com/v1beta/models/"
                     f"{GEMINI_MODEL}:generateContent")
 GEMINI_TIMEOUT   = 60

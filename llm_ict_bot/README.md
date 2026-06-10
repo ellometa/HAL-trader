@@ -27,7 +27,8 @@ The `part*.py` files are the same source split into review-sized sections.
   (the repo `.venv` has all of these)
 - The 1m EUR/USD Parquet store at `../data/eurusd_1m.parquet`
 - One LLM provider:
-  - Gemini: `export GEMINI_API_KEY=...` (aistudio.google.com/apikey), or
+  - Gemini: `export GEMINI_API_KEY=...` (aistudio.google.com/apikey), or put the key
+    in a git-ignored `llm_ict_bot/.gemini_key` file (env var wins if both are set), or
   - Ollama: local server with `ollama pull llama3.1:8b`, plus `LLM_PROVIDER="ollama"`
 
 Run headless with:

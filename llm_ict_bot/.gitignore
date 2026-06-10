@@ -1,4 +1,5 @@
 runs/
+.gemini_key
 _shakedown.py
 _shakedown.log
 .ipynb_checkpoints/
