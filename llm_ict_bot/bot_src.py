@@ -1281,9 +1281,10 @@ def llm_decide(context: str, price: float, cache: LLMCache, logger: JsonlLogger,
             status, reject_reason = "retried", reason
         else:                                       # second failure → skip the trade
             plan, status, reject_reason = TradePlan("none"), "validator_rejected", reason
-    record = {"plan": plan.to_dict(), "status": status, "reject_reason": reject_reason,
-              "decision_time": str(decision_time)}
-    cache.put(key, record)
+    if status != "llm_error":          # never cache transport failures — a re-run
+        record = {"plan": plan.to_dict(), "status": status,        # should retry them
+                  "reject_reason": reject_reason, "decision_time": str(decision_time)}
+        cache.put(key, record)
     return {"plan": plan, "status": status, "cache_hit": False,
             "attempts": attempt, "reject_reason": reject_reason}
 
