@@ -1,0 +1,126 @@
+# Research Summary — LLM + ICT Hybrid Trading Bot (EUR/USD)
+
+**Question.** Does a deterministic ICT/Smart-Money-Concepts strategy — optionally
+with an LLM as the decision-maker — produce positive risk-adjusted returns on
+EUR/USD intraday, out of sample and after costs?
+
+**Answer.** No. Across three independent tests on a leakage-safe backtest, the
+sweep-reversal ICT playbook had **negative expectancy**, an LLM decision layer
+**added no edge**, and an 864-configuration parameter search that was profitable
+in-sample **failed entirely out-of-sample**. The strongest single result: over a
+24-month, 89-trade window the strategy returned **−15.4%** while simply holding
+EUR/USD returned **+6.0%**.
+
+This is a negative result, reported honestly. The value delivered is the
+methodology and the infrastructure, not a profitable strategy.
+
+---
+
+## The strategy under test
+
+Mechanical ICT confluence, evaluated at every New-York-session 15-minute close
+while flat:
+
+1. **Liquidity sweep** — price wicks through a recent 15m swing level and closes
+   back inside (a stop-run).
+2. **Structure shift** — a 15m BOS/CHoCH in the sweep's reversal direction,
+   confirmed *after* the sweep.
+3. **Premium/discount filter** — on the 1h dealing range, longs only from
+   discount, shorts only from premium.
+
+Entry next 1m open; stop beyond the sweep wick (±2 pips, min 5-pip stop); take
+profit at 2R; 1% equity risk per trade; 1-pip round-trip spread.
+
+The LLM variant receives the *same* detector events as point-in-time context and
+makes the long/short/none call itself, constrained by the same validator and risk
+engine — isolating exactly one variable: **mechanical rules vs. LLM judgment over
+identical information.**
+
+## Execution integrity (verified)
+
+The −15% results are the strategy losing money, not a plumbing bug. Confirmed against
+the trade logs:
+
+- Every trade exits via stop-loss or take-profit, enforced intrabar on 1m data,
+  **stop-loss-first** when a bar spans both (pessimistic).
+- Position sizing is genuine 1%-of-equity: `units = risk_usd / |fill − SL|`, so
+  wider stops take smaller size (dollar risk stays ~$1,000 on $100k).
+- Costs are real: losses come in slightly worse than −1R and wins slightly under
+  +2R — the spread drag, larger in R-terms on tighter stops (an 8-pip stop loses
+  ~1.125R).
+- Leakage controls: `close_time`/`confirmed_time` discipline, machine-checked by a
+  prefix-consistency property test across all 8 detectors; next-bar fills only.
+
+---
+
+## Test 1 — LLM vs. rules, February 2026 (live decision layer)
+
+Real LLM walk-forward, 719 consultations, 0 transport errors.
+
+| strategy | model | trades | return | Sharpe |
+|---|---|---|---|---|
+| LLM | llama3.1:8b (local) | 1 | −1.09% | −3.31 |
+| LLM | llama3.2:3b (local) | 0 | 0.00% | — |
+| rule-only ICT | — | 4 | −1.31% | −1.43 |
+| buy-and-hold | — | — | −0.33% | −0.86 |
+
+The 8B proposed 10 entries but 9 failed the reward:risk validator and reverted to
+"no trade"; its one surviving trade stopped out for −1R. The 3B abstained on all 578
+decisions — a degenerate "never trade" policy, not skill. **The LLM did not beat the
+mechanical rules; it added cost and latency without edge.** (One month is a thin
+sample — hence Tests 2 and 3.)
+
+## Test 2 — Parameter search, in-sample vs. out-of-sample
+
+864 configurations over 8 knobs (sweep window, killzone timing, CHoCH/BOS
+strictness, premium-discount timeframe, FVG/displacement confluence, RR target, min
+stop). Tuned on **2021–2024**, gated for robustness (positive in ≥3 of 4 years, ≥40
+trades, PF ≥ 1.15), then the survivors validated **once** on untouched **2025 →
+2026-06**.
+
+- **In-sample:** 16 robust survivors. Best +38.9R total; one config positive in all
+  four years (+18.3R).
+- **Out-of-sample:** every survivor negative. Best −10.5R (PF 0.72); shipped
+  baseline −28.5R.
+
+**In-sample edge did not transfer.** This is the textbook signature of overfitting,
+and it is why "tune the filters until the curve is positive" was rejected as
+methodology — on a 4-trade month it is curve-fitting, and on the full grid it
+produced nothing that survived OOS.
+
+## Test 3 — Two-year baseline (largest sample)
+
+Rule-only walk-forward, **June 2024 → June 2026**, 24 monthly folds, no LLM.
+
+| strategy | trades | win rate | return | max DD | Sharpe |
+|---|---|---|---|---|---|
+| rule-only ICT | 89 | 29.2% | **−15.45%** | −15.45% | −1.07 |
+| buy-and-hold | — | — | **+5.95%** | −9.09% | +0.38 |
+
+89 trades is a statistically meaningful sample. The 29.2% hit rate is fatally short
+of the ~33% a 2R strategy needs to break even (PF 0.75 — returns 75¢ per dollar
+risked). Max drawdown equals total return: it bled to its low at the endpoint with no
+recovery. **Holding EUR/USD beat the "smart" rules by 21 percentage points.**
+
+---
+
+## Conclusion
+
+1. **The signal source is the problem, not the implementation.** ICT
+   sweep-reversal on EUR/USD intraday has negative expectancy across a large,
+   honest sample.
+2. **An LLM cannot rescue a negative-expectancy signal.** Filtering bad trades
+   harder does not make them good; the LLM would need to *be* the entire edge,
+   and at 8B/3B local scale it was not.
+3. **The framework is sound and reusable.** Leakage-safe engine, verified cost and
+   risk modeling, and a screening harness that tune-and-validates a strategy family
+   over four years in minutes.
+
+**What would be productive next** (the harness makes each a fast screen):
+trend/breakout continuation logic (the opposite of what failed — the 2-year data
+shows this period rewarded trend exposure); a less efficient instrument (BTC data is
+in the repo); or a longer horizon (daily bars, where a 1-pip spread becomes noise).
+
+*One window, one pair, paper costs — every result here carries that caveat. The
+finding is "this strategy family failed every test we ran," not "no strategy can
+work."*

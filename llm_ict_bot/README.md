@@ -5,6 +5,11 @@ detectors produce a point-in-time multi-timeframe context, an LLM makes the trad
 decision, a validator enforces the 1:2 reward:risk contract, and a 1-minute-resolution
 paper simulator executes with spread-only costs and risk circuit breakers.
 
+> **Result (negative, honest):** across three out-of-sample tests this ICT
+> sweep-reversal strategy had negative expectancy, and the LLM layer added no edge.
+> Over 2 years / 89 trades it returned −15.4% vs +6.0% for buy-and-hold. Full
+> writeup with methodology and numbers in **[`RESEARCH_SUMMARY.md`](RESEARCH_SUMMARY.md)**.
+
 The decision layer is provider-pluggable (`LLM_PROVIDER` in the config cell):
 **Ollama** (`llama3.1:8b`) honors the original local-only/no-paid-API spec;
 **Gemini** (`gemini-2.5-flash-lite`) is a documented temporary exception, adopted
