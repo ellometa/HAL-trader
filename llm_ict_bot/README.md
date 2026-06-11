@@ -58,3 +58,18 @@ reporting cells fall back to those results.
 The rule-only ICT baseline trades the *same* mechanical confluence the LLM is asked
 to judge (liquidity sweep → structure shift → premium/discount filter) on the same
 out-of-sample window. If the LLM does not beat it, the report says so plainly.
+
+## Rule-tuning study (2026-06-11) — negative result
+
+`tune_rules.py` ran an 864-config grid over the rule strategy's parameters
+(sweep window, killzone timing, CHoCH/BOS strictness, premium-discount TF,
+FVG/displacement confluence, RR target, min stop) on 2021-2024, gated on
+per-year consistency (positive in >= 3 of 4 years, >= 40 trades), then validated
+the three most robust survivors once on untouched 2025 → 2026-06 data. The
+harness reproduces the notebook engine's trades (validated against the Feb-2026
+run). Every survivor was profitable in-sample (best: +18.3R, positive all four
+years) and unprofitable out-of-sample (best: -10.5R, PF 0.72); the shipped
+baseline did -28.5R there. Conclusion: within this sweep-reversal confluence
+family on EUR/USD at 1-pip spread, in-sample edge does not transfer — the
+defaults stay as specified, and "tune until positive" is rejected as
+methodology. Grids regenerate with `tune_rules.py --window tune` (~5 min).
