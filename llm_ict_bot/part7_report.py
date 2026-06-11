@@ -29,7 +29,8 @@ if _spx_csv.exists() and RESULTS:
         ax.plot(_spx.index, _spx / _spx.iloc[0] * ACCOUNT_EQUITY,
                 lw=1.1, ls="--", color="dimgray", label="S&P 500 (scaled)")
 ax.axhline(ACCOUNT_EQUITY, color="grey", lw=0.7, ls="--")
-ax.set_title("Equity curves"); ax.set_ylabel("USD"); ax.legend(); ax.grid(alpha=0.3)
+ax.set_title("Equity curves"); ax.set_ylabel("USD"); ax.grid(alpha=0.3)
+ax.legend(loc="center left", bbox_to_anchor=(1.005, 0.5))   # outside, never on the data
 _save(fig, "equity"); plt.show()
 
 fig, ax = plt.subplots(figsize=(11, 3.2))
@@ -38,7 +39,8 @@ for key, res in RESULTS.items():
     dd = 100 * (eq / eq.cummax() - 1)
     ax.plot(dd.index, dd, label=res["label"], lw=1.0)
 ax.axhline(-100 * MAX_DRAWDOWN_HALT, color="red", lw=0.8, ls=":", label="halt level")
-ax.set_title("Drawdown (%)"); ax.set_ylabel("%"); ax.legend(); ax.grid(alpha=0.3)
+ax.set_title("Drawdown (%)"); ax.set_ylabel("%"); ax.grid(alpha=0.3)
+ax.legend(loc="center left", bbox_to_anchor=(1.005, 0.5))
 _save(fig, "drawdown"); plt.show()
 
 # trade markers on price for the strategy with the most closed trades
@@ -58,7 +60,8 @@ if len(_tr) and "r_multiple" in _tr.columns:
     win = closed[closed["pnl_usd"] > 0]; loss = closed[closed["pnl_usd"] <= 0]
     ax.scatter(win["exit_time"], win["exit_px"], marker="o", facecolors="none", edgecolors="green", s=36, label="exit (win)", zorder=3)
     ax.scatter(loss["exit_time"], loss["exit_px"], marker="x", color="red", s=36, label="exit (loss)", zorder=3)
-ax.set_title(f"Trades on price — {_mk['label']}"); ax.legend(loc="best"); ax.grid(alpha=0.3)
+ax.set_title(f"Trades on price — {_mk['label']}"); ax.grid(alpha=0.3)
+ax.legend(loc="center left", bbox_to_anchor=(1.005, 0.5))
 _save(fig, "trades"); plt.show()
 
 # %% [markdown]
