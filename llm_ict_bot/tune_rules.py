@@ -53,6 +53,7 @@ RULE_SL_BUFFER_PIPS = 2.0      # mirrors part5b
 TUNE_START, TUNE_END = pd.Timestamp("2021-01-01"), pd.Timestamp("2025-01-01")
 OOS_START,  OOS_END  = pd.Timestamp("2025-01-01"), pd.Timestamp("2026-06-06")
 WARMUP = pd.Timedelta(days=60)
+FAR_PAST = np.datetime64("2000-01-01")   # "since" floor for most-recent-state lookups
 TUNE_DIR = OUT_DIR / "tune"
 TUNE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -128,6 +129,9 @@ def build_tables(prep: dict) -> dict:
         sw = prep["dets"][tf]["swings"]
         tabs[f"swing_hi_{tf}"] = EventTable(sw[sw["kind"] == "high"], ("level",))
         tabs[f"swing_lo_{tf}"] = EventTable(sw[sw["kind"] == "low"], ("level",))
+    for tf in ("1h", "4h"):              # HTF trend state (+1/-1) for the bias filter
+        st = prep["dets"][tf]["structure"]
+        tabs[f"trend_{tf}"] = EventTable(st[st["trend_after"].notna()], ("trend_after",))
     return tabs
 
 
@@ -148,12 +152,15 @@ class RuleParams:
     need_disp: bool = False           # require a (further) same-dir displacement after signal
     rr_target: float = 2.0            # TP at rr_target * risk
     min_stop_pips: float = 5.0        # reject thinner stops
+    htf_bias: str = "off"             # require trade WITH this TF's trend: "off"|"1h"|"4h"
+                                      # (proper ICT only trades with higher-timeframe bias)
 
     def label(self) -> str:
         fam = "REV" if self.strategy == "reversal" else "BRK"
         return (f"{fam}_W{self.sweep_window_h:g}h_{'KZ' if self.killzone_only else 'SES'}_"
                 f"{self.shift_kinds}_pd{self.pd_tf}_fvg{int(self.need_fvg)}_"
-                f"disp{int(self.need_disp)}_rr{self.rr_target:g}_ms{self.min_stop_pips:g}")
+                f"disp{int(self.need_disp)}_rr{self.rr_target:g}_ms{self.min_stop_pips:g}_"
+                f"bias{self.htf_bias}")
 
 
 BASELINE = RuleParams()   # exactly the shipped rule_ict
@@ -215,6 +222,16 @@ def evaluate(prep: dict, tabs: dict, p: RuleParams,
             if si is None:
                 continue
             sl_ref = stab.cols["level"][si]
+
+        # higher-timeframe bias: only trade WITH the HTF trend (proper-ICT requirement)
+        if p.htf_bias != "off":
+            tt = tabs[f"trend_{p.htf_bias}"]
+            ti = tt.last_visible(t, FAR_PAST)
+            if ti is None:
+                continue
+            trend = tt.cols["trend_after"][ti]
+            if (want == "long" and trend != 1) or (want == "short" and trend != -1):
+                continue
 
         if p.shift_kinds == "both":
             stab = tabs["struct_up" if want == "long" else "struct_dn"]
@@ -306,6 +323,7 @@ def full_grid(strategy: str = "reversal") -> list[RuleParams]:
         (False, True),            # need_disp
         (1.0, 1.5, 2.0, 3.0),     # rr_target
         (5.0, 8.0),               # min_stop_pips
+        ("off", "1h", "4h"),      # htf_bias — trade with higher-timeframe trend
     )
     return [RuleParams(strategy, *c) for c in g]
 

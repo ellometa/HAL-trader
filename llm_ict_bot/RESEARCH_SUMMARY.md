@@ -129,6 +129,32 @@ the 1:1 breakout configs hit ~57% win rate (PF 1.2-1.25, above the 50% break-eve
 at 1:1 there is no reward asymmetry to cushion the win-rate decay that overfitting
 always produced, so it falls straight below break-even. Lower RR did not help.
 
+## Test 5 — Proper-ICT HTF directional-bias filter
+
+Web research into how ICT is actually specified (Silver Bullet, 2022 mentorship model)
+surfaced the biggest gap in our rules: **no higher-timeframe bias filter.** Textbook ICT
+forbids trading against HTF structure ("opposite to HTF trend = invalid setup"); our
+rules faded sweeps in both directions regardless of the 1h/4h trend. Added an `htf_bias`
+filter (trade only with the 1h or 4h trend) and re-screened both families (3,456 configs
+each, same tune/validate protocol).
+
+| | in-sample (2021-2024) | out-of-sample (2025-2026) |
+|---|---|---|
+| breakout, no bias | best PF 1.63 | PF 1.05, +2.3R / 79 trades |
+| breakout, **bias 1h** | best PF **1.72**, win rate 55% | PF **1.12**, +1.4R / 20 trades |
+| reversal, no bias | best PF 1.29 | PF 0.66 (**negative**) |
+| reversal, **bias 1h** | best PF **1.60**, win rate 64% | PF **1.86**, +5.4R / **only 12 trades** |
+
+**The filter genuinely helped, in the direction ICT theory predicts** — win rates rose to
+55-64%, in-sample PF jumped, and OOS moved from break-even/negative toward marginally
+positive. This is the first change that *improved* out-of-sample behavior. **But it is
+still not a tradeable edge:** the filter is so selective it cut OOS samples to 12-20
+trades — too thin to trust (one trade swings PF materially), the surviving edge (PF ~1.1)
+is within noise, and only a 1-pip spread is modeled. The in-sample→OOS decay persists
+(PF 1.7 → 1.1). Verdict: proper-ICT HTF alignment is a real, correct-direction
+improvement that lifts the strategy from "loses money" to "roughly break-even," but does
+not clear the bar for a deployable edge on this evidence.
+
 ---
 
 ## Conclusion
