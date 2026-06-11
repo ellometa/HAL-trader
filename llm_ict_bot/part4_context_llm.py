@@ -362,12 +362,14 @@ def validate_plan(plan: TradePlan, price: float) -> tuple[bool, str]:
                        f"price {price:.5f} (max {MAX_ENTRY_DRIFT_PIPS:.0f})")
     return True, "ok"
 
-# quick self-checks
-_p = TradePlan("long", 1.1000, 1.0990, 1.1020, 80)
-assert validate_plan(_p, 1.1001)[0]
-assert not validate_plan(TradePlan("long", 1.1000, 1.0990, 1.1010, 80), 1.1001)[0]   # 1:1
+# quick self-checks (built at the configured RR_TARGET so BOT_RR overrides stay valid)
+_risk = 0.0010
+_on_tgt = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + RR_TARGET * _risk, 80)
+_off_tgt = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + (RR_TARGET + 1.0) * _risk, 80)
+assert validate_plan(_on_tgt, 1.1001)[0]
+assert not validate_plan(_off_tgt, 1.1001)[0]                                        # wrong R:R
 assert not validate_plan(TradePlan("short", 1.1000, 1.0990, 1.1020, 80), 1.1001)[0]  # sides wrong
-assert not validate_plan(_p, 1.1050)[0]                                              # entry drift
+assert not validate_plan(_on_tgt, 1.1050)[0]                                         # entry drift
 assert validate_plan(TradePlan("none"), 1.1)[0]
 print("validator ready")
 

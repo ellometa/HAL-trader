@@ -59,9 +59,16 @@ if DO_REAL:
 
 # %%
 if DO_REAL:
-    print("rule-only ICT baseline:")
-    RESULTS["rule_ict"] = run_walk_forward(clean_1m, M_TF, M_DET,
-                                           make_rule_decide_fn(M_DET), "rule_ict")
+    # BOT_STRATEGY=breakout_bias swaps the shipped reversal rule for the improved
+    # breakout + 1h-HTF-bias strategy (Test 5 winner). Kept under the "rule_ict" key
+    # so all downstream reporting works unchanged; the label reflects which ran.
+    _strat = os.environ.get("BOT_STRATEGY", "reversal")
+    if _strat == "breakout_bias":
+        _decide, _label = make_breakout_decide_fn(M_DET), "ict_breakout_bias"
+    else:
+        _decide, _label = make_rule_decide_fn(M_DET), "rule_ict"
+    print(f"rule strategy: {_label} (RR target {RR_TARGET:g}):")
+    RESULTS["rule_ict"] = run_walk_forward(clean_1m, M_TF, M_DET, _decide, _label)
     RESULTS["buy_hold"] = buy_and_hold(M_TF, BACKTEST_START, BACKTEST_END)
     print(f"buy-and-hold final equity: ${RESULTS['buy_hold']['final_equity']:,.0f}")
 else:

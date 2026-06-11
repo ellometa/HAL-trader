@@ -52,8 +52,8 @@ import requests
 # ----------------------------------------------------------------------------- core
 ACCOUNT_EQUITY   = 100_000        # USD starting equity
 RISK_PCT         = 0.01           # 1% of current equity risked per trade
-RR_TARGET        = 2.0            # fixed 1:2 reward:risk
-RR_TOLERANCE     = 0.15           # validator accepts RR in [2.0-tol, 2.0+tol]
+RR_TARGET        = float(os.environ.get("BOT_RR", "2.0"))   # reward:risk (BOT_RR-overridable)
+RR_TOLERANCE     = 0.15           # validator accepts RR in [target-tol, target+tol]
 SPREAD_PIPS      = 1.0            # EUR/USD spread, fixed (the only cost modelled)
 PIP              = 0.0001         # EUR/USD pip size
 CONF_THRESHOLD   = 70             # skip trades below this LLM confidence (gate only)
@@ -1207,12 +1207,14 @@ def validate_plan(plan: TradePlan, price: float) -> tuple[bool, str]:
                        f"price {price:.5f} (max {MAX_ENTRY_DRIFT_PIPS:.0f})")
     return True, "ok"
 
-# quick self-checks
-_p = TradePlan("long", 1.1000, 1.0990, 1.1020, 80)
-assert validate_plan(_p, 1.1001)[0]
-assert not validate_plan(TradePlan("long", 1.1000, 1.0990, 1.1010, 80), 1.1001)[0]   # 1:1
+# quick self-checks (built at the configured RR_TARGET so BOT_RR overrides stay valid)
+_risk = 0.0010
+_on_tgt = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + RR_TARGET * _risk, 80)
+_off_tgt = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + (RR_TARGET + 1.0) * _risk, 80)
+assert validate_plan(_on_tgt, 1.1001)[0]
+assert not validate_plan(_off_tgt, 1.1001)[0]                                        # wrong R:R
 assert not validate_plan(TradePlan("short", 1.1000, 1.0990, 1.1020, 80), 1.1001)[0]  # sides wrong
-assert not validate_plan(_p, 1.1050)[0]                                              # entry drift
+assert not validate_plan(_on_tgt, 1.1050)[0]                                         # entry drift
 assert validate_plan(TradePlan("none"), 1.1)[0]
 print("validator ready")
 
@@ -1594,6 +1596,67 @@ def make_rule_decide_fn(det_store: dict) -> Callable:
     return decide
 
 
+# --- improved ICT: breakout/continuation + higher-timeframe bias --------------------
+# The best out-of-sample config from the tune_rules.py study (Test 5 in
+# RESEARCH_SUMMARY): trade WITH a recent 15m displacement, but only when it agrees with
+# the 1h trend (proper-ICT HTF bias), confirmed by a same-direction structure shift, in
+# the favorable 4h premium/discount zone; stop beyond the last opposing 15m swing.
+# Engine-side port of tune_rules.py so it can produce a full notebook report; uses
+# RR_TARGET (set BOT_RR=1.5 to match the validated config).
+BRK_SIGNAL_WINDOW = pd.Timedelta("2h")
+BRK_MIN_STOP_PIPS = 8.0
+
+def make_breakout_decide_fn(det_store: dict, htf_bias_tf: str = "1h",
+                            pd_tf: str = "4h") -> Callable:
+    d15, dbias, dpd = det_store["15min"], det_store[htf_bias_tf], det_store[pd_tf]
+
+    def decide(ctx_provider, price, t):
+        none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+        disp = visible(d15["displacement"], t, since=t - BRK_SIGNAL_WINDOW)
+        if disp.empty:
+            return none
+        want = "long" if disp.iloc[-1]["direction"] == "bullish" else "short"
+        d_time = disp.iloc[-1]["time"]
+        # HTF bias: only trade with the 1h trend
+        bias = visible(dbias["structure"], t)
+        if bias.empty:
+            return none
+        trend = bias.iloc[-1]["trend_after"]
+        if (want == "long" and trend != 1) or (want == "short" and trend != -1):
+            return none
+        # same-direction structure shift after the displacement
+        ev_after = visible(d15["structure"], t)
+        ev_after = ev_after[ev_after["time"] > d_time]
+        shift_kinds = ("CHoCH_up", "BOS_up") if want == "long" else ("CHoCH_down", "BOS_down")
+        if ev_after.empty or not ev_after["kind"].isin(shift_kinds).any():
+            return none
+        pdd = premium_discount(visible(dpd["swings"], t, since=context_window_start(t)), price)
+        if pdd is None or (want == "long" and pdd["zone"] != "discount") \
+                or (want == "short" and pdd["zone"] != "premium"):
+            return none
+        # stop beyond the last opposing 15m swing
+        sw = visible(d15["swings"], t, since=context_window_start(t))
+        sw = sw[sw["kind"] == ("low" if want == "long" else "high")]
+        if sw.empty:
+            return none
+        ref = sw.iloc[-1]["level"]
+        buf = RULE_SL_BUFFER_PIPS * PIP
+        sl = ref - buf if want == "long" else ref + buf
+        risk = (price - sl) if want == "long" else (sl - price)
+        if risk < BRK_MIN_STOP_PIPS * PIP:
+            return none
+        tp = price + RR_TARGET * risk if want == "long" else price - RR_TARGET * risk
+        plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
+                         confidence=100, reasoning="breakout + 1h HTF bias + P/D")
+        ok, reason = validate_plan(plan, price)
+        if not ok:
+            return {**none, "status": "validator_rejected", "reject_reason": reason}
+        return {"plan": plan, "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+    return decide
+
+
 # --- deterministic mock LLM for the smoke test --------------------------------------
 class MockLLM:
     """Scripted generate_fn. Cycles through: valid long / none / low-confidence long
@@ -1604,28 +1667,31 @@ class MockLLM:
     def __call__(self, prompt: str) -> str:
         m = re.search(r"CURRENT PRICE : (\d+\.\d+)", prompt)
         p = float(m.group(1)) if m else 1.1000
+        rk = 0.0010                       # stop distance
+        tgt = round(RR_TARGET * rk, 5)    # on-target TP distance (tracks BOT_RR override)
+        bad = round((RR_TARGET + 1.0) * rk, 5)   # off-target distance → must fail validator
         i = self.calls % 6
         self.calls += 1
         if i == 0:
-            return json.dumps({"direction": "long", "entry": p, "stop_loss": p - 0.0010,
-                               "take_profit": p + 0.0020, "confidence": 85,
+            return json.dumps({"direction": "long", "entry": p, "stop_loss": p - rk,
+                               "take_profit": p + tgt, "confidence": 85,
                                "reasoning": "mock A+ long"})
         if i == 1:
             return json.dumps({"direction": "none", "entry": 0, "stop_loss": 0,
                                "take_profit": 0, "confidence": 10, "reasoning": "mock no-trade"})
         if i == 2:
-            return json.dumps({"direction": "long", "entry": p, "stop_loss": p - 0.0010,
-                               "take_profit": p + 0.0020, "confidence": 40,
+            return json.dumps({"direction": "long", "entry": p, "stop_loss": p - rk,
+                               "take_profit": p + tgt, "confidence": 40,
                                "reasoning": "mock low-confidence (should be gated)"})
         if i == 3:
             return "I think we should buy here because momentum looks good."   # parse failure
         if i == 4:
-            return json.dumps({"direction": "short", "entry": p, "stop_loss": p + 0.0010,
-                               "take_profit": p - 0.0020, "confidence": 90,
+            return json.dumps({"direction": "short", "entry": p, "stop_loss": p + rk,
+                               "take_profit": p - tgt, "confidence": 90,
                                "reasoning": "mock A+ short"})
-        return json.dumps({"direction": "long", "entry": p, "stop_loss": p - 0.0010,
-                           "take_profit": p + 0.0010, "confidence": 95,
-                           "reasoning": "mock 1:1 RR (should be rejected)"})
+        return json.dumps({"direction": "long", "entry": p, "stop_loss": p - rk,
+                           "take_profit": p + bad, "confidence": 95,
+                           "reasoning": "mock wrong-R:R (should be rejected)"})
 
 
 # --- buy-and-hold reference ----------------------------------------------------------
@@ -1688,7 +1754,18 @@ def run_walk_forward(df_1m: pd.DataFrame, tf_store: dict, det_store: dict,
     carry, peak = ACCOUNT_EQUITY, ACCOUNT_EQUITY
     parts, fold_rows = [], []
     remaining = max_decisions
-    for k, (s, e) in enumerate(folds, 1):
+    # BOT_PROGRESS=1 shows a tqdm bar and writes a flushed per-fold line to
+    # BOT_PROGRESS_FILE (default runs/logs/progress.txt) — readable live during a run
+    # that nbconvert would otherwise buffer until the cell finishes.
+    _prog = bool(os.environ.get("BOT_PROGRESS"))
+    _pfile = os.environ.get("BOT_PROGRESS_FILE", str(LOG_DIR / "progress.txt"))
+    _iter = enumerate(folds, 1)
+    if _prog:
+        import sys
+        from tqdm import tqdm
+        open(_pfile, "w").close()                       # reset for this run
+        _iter = tqdm(_iter, total=len(folds), desc=f"{label}", file=sys.stdout, ncols=80)
+    for k, (s, e) in _iter:
         r = run_engine(df_1m, tf_store, det_store, decide_fn, s, e, label,
                        equity0=carry, peak0=peak, max_decisions=remaining)
         parts.append(r)
@@ -1699,7 +1776,12 @@ def run_walk_forward(df_1m: pd.DataFrame, tf_store: dict, det_store: dict,
         if remaining is not None:
             remaining = max(0, remaining - r["counters"]["llm_consults"])
         carry, peak = r["final_equity"], r["final_peak"]
-        if not quiet:
+        if _prog:
+            with open(_pfile, "a") as _pf:
+                _pf.write(f"fold {k}/{len(folds)} {100*k//len(folds)}%  {e.date()}  "
+                          f"trades {len(r['trades'])}  equity ${carry:,.0f}"
+                          + ("  HALTED" if r["halted"] else "") + "\n")
+        elif not quiet:
             print(f"  fold {k:>2}/{len(folds)}  {s.date()} → {e.date()}  "
                   f"trades {len(r['trades']):>3}  equity ${carry:,.0f}"
                   + ("  [HALTED]" if r["halted"] else ""))
@@ -1827,9 +1909,16 @@ if DO_REAL:
 
 # %%
 if DO_REAL:
-    print("rule-only ICT baseline:")
-    RESULTS["rule_ict"] = run_walk_forward(clean_1m, M_TF, M_DET,
-                                           make_rule_decide_fn(M_DET), "rule_ict")
+    # BOT_STRATEGY=breakout_bias swaps the shipped reversal rule for the improved
+    # breakout + 1h-HTF-bias strategy (Test 5 winner). Kept under the "rule_ict" key
+    # so all downstream reporting works unchanged; the label reflects which ran.
+    _strat = os.environ.get("BOT_STRATEGY", "reversal")
+    if _strat == "breakout_bias":
+        _decide, _label = make_breakout_decide_fn(M_DET), "ict_breakout_bias"
+    else:
+        _decide, _label = make_rule_decide_fn(M_DET), "rule_ict"
+    print(f"rule strategy: {_label} (RR target {RR_TARGET:g}):")
+    RESULTS["rule_ict"] = run_walk_forward(clean_1m, M_TF, M_DET, _decide, _label)
     RESULTS["buy_hold"] = buy_and_hold(M_TF, BACKTEST_START, BACKTEST_END)
     print(f"buy-and-hold final equity: ${RESULTS['buy_hold']['final_equity']:,.0f}")
 else:

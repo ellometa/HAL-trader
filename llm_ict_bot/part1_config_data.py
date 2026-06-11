@@ -52,8 +52,8 @@ import requests
 # ----------------------------------------------------------------------------- core
 ACCOUNT_EQUITY   = 100_000        # USD starting equity
 RISK_PCT         = 0.01           # 1% of current equity risked per trade
-RR_TARGET        = 2.0            # fixed 1:2 reward:risk
-RR_TOLERANCE     = 0.15           # validator accepts RR in [2.0-tol, 2.0+tol]
+RR_TARGET        = float(os.environ.get("BOT_RR", "2.0"))   # reward:risk (BOT_RR-overridable)
+RR_TOLERANCE     = 0.15           # validator accepts RR in [target-tol, target+tol]
 SPREAD_PIPS      = 1.0            # EUR/USD spread, fixed (the only cost modelled)
 PIP              = 0.0001         # EUR/USD pip size
 CONF_THRESHOLD   = 70             # skip trades below this LLM confidence (gate only)
