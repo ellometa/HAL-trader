@@ -6,3 +6,9 @@ _shakedown.log
 __pycache__/
 bot_victus.ipynb
 bot_rule_janmay.ipynb
+bot_rule_2yr.ipynb
+bot_rule_5yr.ipynb
+bot_rule_5yr_nobrk.ipynb
+bot_brk3yr.ipynb
+bot_cmp_test.ipynb
+bot_strat_compare.ipynb

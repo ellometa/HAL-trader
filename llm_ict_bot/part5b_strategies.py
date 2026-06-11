@@ -84,6 +84,8 @@ def make_breakout_decide_fn(det_store: dict, htf_bias_tf: str = "1h",
     def decide(ctx_provider, price, t):
         none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
                 "attempts": 1, "reject_reason": ""}
+        if not (7 * 60 <= _et_minute(t) < 16 * 60):          # NY session self-gate
+            return none
         disp = visible(d15["displacement"], t, since=t - BRK_SIGNAL_WINDOW)
         if disp.empty:
             return none
@@ -120,6 +122,158 @@ def make_breakout_decide_fn(det_store: dict, htf_bias_tf: str = "1h",
         tp = price + RR_TARGET * risk if want == "long" else price - RR_TARGET * risk
         plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
                          confidence=100, reasoning="breakout + 1h HTF bias + P/D")
+        ok, reason = validate_plan(plan, price)
+        if not ok:
+            return {**none, "status": "validator_rejected", "reject_reason": reason}
+        return {"plan": plan, "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+    return decide
+
+
+# --- liquidity references for the new strategies ------------------------------------
+def _et_minute(t) -> int:
+    """Minute-of-day in New York time for a tz-naive UTC timestamp."""
+    e = pd.Timestamp(t).tz_localize("UTC").tz_convert(TZ_NY)
+    return e.hour * 60 + e.minute
+
+def _prev_day_hilo_lookup(tf_store: dict):
+    """f(t) -> (high, low) of the most recent *completed* daily bar (knowable at t)."""
+    d1 = tf_store["1d"]
+    ct = d1["close_time"].to_numpy(dtype="datetime64[ns]")
+    hi, lo = d1["high"].to_numpy(), d1["low"].to_numpy()
+    def f(t):
+        i = int(np.searchsorted(ct, np.datetime64(t), side="right")) - 1
+        return (hi[i], lo[i]) if i >= 0 else None
+    return f
+
+def _midnight_open_lookup(tf_store: dict):
+    """f(t) -> open of the current ET day's 00:00 15m bar (the Judas reference)."""
+    f15 = tf_store["15min"]
+    et = f15.index.tz_localize("UTC").tz_convert(TZ_NY)
+    mid = np.asarray((et.hour == 0) & (et.minute == 0))
+    dates = et[mid].normalize().tz_localize(None)
+    m = {d: o for d, o in zip([x.date() for x in dates], f15["open"].to_numpy()[mid])}
+    def f(t):
+        return m.get(pd.Timestamp(t).tz_localize("UTC").tz_convert(TZ_NY).date())
+    return f
+
+
+# --- MIDNIGHT RAID — ICT Judas Swing (session-open liquidity raid) -------------------
+JUDAS_LO, JUDAS_HI = 0, 5 * 60           # 00:00–05:00 ET window
+
+def make_judas_decide_fn(det_store: dict, tf_store: dict, htf_bias_tf: str = "1h") -> Callable:
+    d15, dbias = det_store["15min"], det_store[htf_bias_tf]
+    f15 = tf_store["15min"]
+    idx = f15.index.to_numpy(dtype="datetime64[ns]")
+    low, high = f15["low"].to_numpy(), f15["high"].to_numpy()
+    mid_open, pdhl = _midnight_open_lookup(tf_store), _prev_day_hilo_lookup(tf_store)
+
+    def decide(ctx_provider, price, t):
+        none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+        if not (JUDAS_LO <= _et_minute(t) < JUDAS_HI):       # 00:00–05:00 ET only
+            return none
+        mo = mid_open(t)
+        if mo is None:
+            return none
+        bias = visible(dbias["structure"], t)
+        if bias.empty:
+            return none
+        trend = bias.iloc[-1]["trend_after"]
+        want = "long" if trend == 1 else "short"
+        # today's bars from 00:00 ET up to t — find the judas extreme against bias
+        t_et = pd.Timestamp(t).tz_localize("UTC").tz_convert(TZ_NY)
+        day0 = np.datetime64(t_et.normalize().tz_convert("UTC").tz_localize(None))
+        m = (idx >= day0) & (idx <= np.datetime64(t))
+        if not m.any():
+            return none
+        if want == "long":
+            ext = low[m].min()
+            if ext >= mo:                                    # no sweep below the open
+                return none
+            ext_time = pd.Timestamp(idx[m][low[m].argmin()])
+        else:
+            ext = high[m].max()
+            if ext <= mo:                                    # no sweep above the open
+                return none
+            ext_time = pd.Timestamp(idx[m][high[m].argmax()])
+        # reversal: same-as-bias 15m structure shift after the judas extreme
+        ev = visible(d15["structure"], t)
+        ev = ev[ev["time"] > ext_time]
+        shift = ("CHoCH_up", "BOS_up") if want == "long" else ("CHoCH_down", "BOS_down")
+        if ev.empty or not ev["kind"].isin(shift).any():
+            return none
+        buf = RULE_SL_BUFFER_PIPS * PIP
+        sl = ext - buf if want == "long" else ext + buf
+        risk = (price - sl) if want == "long" else (sl - price)
+        if risk < RULE_MIN_STOP_PIPS * PIP:
+            return none
+        pdh = pdhl(t)
+        if pdh is None:
+            return none
+        tp = pdh[0] if want == "long" else pdh[1]            # previous-day liquidity
+        reward = (tp - price) if want == "long" else (price - tp)
+        if reward < risk:                                    # < 1R to the liquidity pool
+            return none
+        plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
+                         confidence=100, reasoning="judas: sweep midnight open → MSS → PDH/PDL")
+        ok, reason = validate_plan(plan, price)
+        if not ok:
+            return {**none, "status": "validator_rejected", "reject_reason": reason}
+        return {"plan": plan, "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+    return decide
+
+
+# --- BLOODHOUND — SLIPSTREAM entry, previous-day-liquidity target --------------------
+def make_breakout_liq_decide_fn(det_store: dict, tf_store: dict, htf_bias_tf: str = "1h",
+                                pd_tf: str = "4h") -> Callable:
+    d15, dbias, dpd = det_store["15min"], det_store[htf_bias_tf], det_store[pd_tf]
+    pdhl = _prev_day_hilo_lookup(tf_store)
+
+    def decide(ctx_provider, price, t):
+        none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+        if not (7 * 60 <= _et_minute(t) < 16 * 60):          # NY session self-gate
+            return none
+        disp = visible(d15["displacement"], t, since=t - BRK_SIGNAL_WINDOW)
+        if disp.empty:
+            return none
+        want = "long" if disp.iloc[-1]["direction"] == "bullish" else "short"
+        d_time = disp.iloc[-1]["time"]
+        bias = visible(dbias["structure"], t)
+        if bias.empty:
+            return none
+        trend = bias.iloc[-1]["trend_after"]
+        if (want == "long" and trend != 1) or (want == "short" and trend != -1):
+            return none
+        ev = visible(d15["structure"], t)
+        ev = ev[ev["time"] > d_time]
+        shift = ("CHoCH_up", "BOS_up") if want == "long" else ("CHoCH_down", "BOS_down")
+        if ev.empty or not ev["kind"].isin(shift).any():
+            return none
+        pdd = premium_discount(visible(dpd["swings"], t, since=context_window_start(t)), price)
+        if pdd is None or (want == "long" and pdd["zone"] != "discount") \
+                or (want == "short" and pdd["zone"] != "premium"):
+            return none
+        sw = visible(d15["swings"], t, since=context_window_start(t))
+        sw = sw[sw["kind"] == ("low" if want == "long" else "high")]
+        if sw.empty:
+            return none
+        buf = RULE_SL_BUFFER_PIPS * PIP
+        sl = sw.iloc[-1]["level"] - buf if want == "long" else sw.iloc[-1]["level"] + buf
+        risk = (price - sl) if want == "long" else (sl - price)
+        if risk < BRK_MIN_STOP_PIPS * PIP:
+            return none
+        pdh = pdhl(t)
+        if pdh is None:
+            return none
+        tp = pdh[0] if want == "long" else pdh[1]            # previous-day liquidity target
+        reward = (tp - price) if want == "long" else (price - tp)
+        if reward < risk:
+            return none
+        plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
+                         confidence=100, reasoning="breakout+bias → PDH/PDL liquidity")
         ok, reason = validate_plan(plan, price)
         if not ok:
             return {**none, "status": "validator_rejected", "reject_reason": reason}

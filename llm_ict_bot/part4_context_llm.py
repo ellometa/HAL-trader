@@ -355,19 +355,24 @@ def validate_plan(plan: TradePlan, price: float) -> tuple[bool, str]:
     if risk < 1e-9:
         return False, "zero risk distance"
     rr = reward / risk
-    if abs(rr - RR_TARGET) > RR_TOLERANCE:
+    # BOT_RR_FREE: liquidity-target strategies (BLOODHOUND, MIDNIGHT RAID) have variable
+    # RR by design, so skip the fixed-RR check but still require a minimum 1.0R.
+    if RR_FREE:
+        if rr < 1.0:
+            return False, f"R:R {rr:.2f} below 1.0 minimum"
+    elif abs(rr - RR_TARGET) > RR_TOLERANCE:
         return False, f"R:R {rr:.2f} violates target {RR_TARGET:.1f}±{RR_TOLERANCE}"
     if abs(e - price) > MAX_ENTRY_DRIFT_PIPS * PIP:
         return False, (f"entry {e:.5f} is {abs(e - price) / PIP:.1f} pips from current "
                        f"price {price:.5f} (max {MAX_ENTRY_DRIFT_PIPS:.0f})")
     return True, "ok"
 
-# quick self-checks (built at the configured RR_TARGET so BOT_RR overrides stay valid)
+# quick self-checks (valid under both fixed-RR and BOT_RR_FREE modes)
 _risk = 0.0010
 _on_tgt = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + RR_TARGET * _risk, 80)
-_off_tgt = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + (RR_TARGET + 1.0) * _risk, 80)
+_lowrr = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + 0.5 * _risk, 80)   # 0.5R: fails both modes
 assert validate_plan(_on_tgt, 1.1001)[0]
-assert not validate_plan(_off_tgt, 1.1001)[0]                                        # wrong R:R
+assert not validate_plan(_lowrr, 1.1001)[0]                                          # bad R:R
 assert not validate_plan(TradePlan("short", 1.1000, 1.0990, 1.1020, 80), 1.1001)[0]  # sides wrong
 assert not validate_plan(_on_tgt, 1.1050)[0]                                         # entry drift
 assert validate_plan(TradePlan("none"), 1.1)[0]

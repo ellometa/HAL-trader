@@ -54,6 +54,7 @@ ACCOUNT_EQUITY   = 100_000        # USD starting equity
 RISK_PCT         = 0.01           # 1% of current equity risked per trade
 RR_TARGET        = float(os.environ.get("BOT_RR", "2.0"))   # reward:risk (BOT_RR-overridable)
 RR_TOLERANCE     = 0.15           # validator accepts RR in [target-tol, target+tol]
+RR_FREE          = bool(os.environ.get("BOT_RR_FREE"))      # variable-RR (liquidity targets)
 SPREAD_PIPS      = 1.0            # EUR/USD spread, fixed (the only cost modelled)
 PIP              = 0.0001         # EUR/USD pip size
 CONF_THRESHOLD   = 70             # skip trades below this LLM confidence (gate only)
@@ -62,8 +63,10 @@ SESSION          = "new_york"     # entries only during NY session (context: all
 # NY session window for *entries*, in America/New_York local time (DST-aware).
 # ICT's NY forex killzone is 07:00-10:00 ET; we allow the broader NY session and
 # stop before the 17:00 ET rollover. Source: innercircletrader.net killzone guide.
-NY_SESSION_START = "07:00"
-NY_SESSION_END   = "16:00"
+# Env-overridable so the multi-strategy compare run can widen the decision window to
+# 00:00-16:00 ET (MIDNIGHT RAID needs 00:00-05:00); each strategy self-gates internally.
+NY_SESSION_START = os.environ.get("BOT_SESSION_START", "07:00")
+NY_SESSION_END   = os.environ.get("BOT_SESSION_END", "16:00")
 TZ_NY            = ZoneInfo("America/New_York")
 
 # ----------------------------------------------------------------------------- data

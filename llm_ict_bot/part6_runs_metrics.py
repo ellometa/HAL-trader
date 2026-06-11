@@ -58,7 +58,23 @@ if DO_REAL:
 # ### Rule-only ICT baseline + buy-and-hold (deterministic, fast)
 
 # %%
-if DO_REAL:
+if DO_REAL and os.environ.get("BOT_COMPARE_STRATS"):
+    # Three named ICT strategies compared head-to-head (see STRATEGY_COMPARISON_SPEC.md).
+    # SLIPSTREAM is keyed "rule_ict" so the existing report wiring works unchanged.
+    print("3-strategy ICT comparison — SLIPSTREAM / MIDNIGHT RAID / BLOODHOUND:")
+    RESULTS["rule_ict"] = run_walk_forward(clean_1m, M_TF, M_DET,
+        make_breakout_decide_fn(M_DET), "SLIPSTREAM")
+    RESULTS["midnight_raid"] = run_walk_forward(clean_1m, M_TF, M_DET,
+        make_judas_decide_fn(M_DET, M_TF), "MIDNIGHT RAID")
+    RESULTS["bloodhound"] = run_walk_forward(clean_1m, M_TF, M_DET,
+        make_breakout_liq_decide_fn(M_DET, M_TF), "BLOODHOUND")
+    for _k in ("rule_ict", "midnight_raid", "bloodhound"):
+        _r = RESULTS[_k]
+        print(f"  {_r['label']:14} trades {len(_r['trades']):>3}  "
+              f"final ${_r['final_equity']:,.0f}")
+    RESULTS["buy_hold"] = buy_and_hold(M_TF, BACKTEST_START, BACKTEST_END)
+    print(f"buy-and-hold final equity: ${RESULTS['buy_hold']['final_equity']:,.0f}")
+elif DO_REAL:
     # BOT_STRATEGY=breakout_bias swaps the shipped reversal rule for the improved
     # breakout + 1h-HTF-bias strategy (Test 5 winner). Kept under the "rule_ict" key
     # so all downstream reporting works unchanged; the label reflects which ran.
