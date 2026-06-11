@@ -1947,6 +1947,17 @@ def _save(fig, name: str) -> None:
 fig, ax = plt.subplots(figsize=(11, 4.5))
 for key, res in RESULTS.items():
     ax.plot(res["curve"].index, res["curve"]["equity"], label=f"{res['label']}", lw=1.2)
+# S&P 500 benchmark — daily closes fetched once into the data store (no internet at
+# runtime), scaled to starting equity over the same window.
+_spx_csv = DATA_PATH / "spx_daily.csv"
+if _spx_csv.exists() and RESULTS:
+    _w0 = min(r["curve"].index.min() for r in RESULTS.values())
+    _w1 = max(r["curve"].index.max() for r in RESULTS.values())
+    _spx = pd.read_csv(_spx_csv, parse_dates=["date"]).set_index("date")["close"]
+    _spx = _spx[(_spx.index >= _w0.normalize()) & (_spx.index <= _w1)]
+    if len(_spx) > 1:
+        ax.plot(_spx.index, _spx / _spx.iloc[0] * ACCOUNT_EQUITY,
+                lw=1.1, ls="--", color="dimgray", label="S&P 500 (scaled)")
 ax.axhline(ACCOUNT_EQUITY, color="grey", lw=0.7, ls="--")
 ax.set_title("Equity curves"); ax.set_ylabel("USD"); ax.legend(); ax.grid(alpha=0.3)
 _save(fig, "equity"); plt.show()
