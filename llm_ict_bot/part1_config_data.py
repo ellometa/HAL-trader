@@ -116,11 +116,12 @@ MAX_CONSEC_LOSSES = 5       # pause new entries for the rest of the day after N 
 # cover the full store. The LLM walk-forward window is bounded by per-call latency:
 # measured ~35-45s/call for local llama3.1:8b on this 16GB machine vs ~1-2s for the
 # Gemini API. Widen the window freely — the context-hash cache replays completed calls.
-BACKTEST_START   = pd.Timestamp("2026-02-01")   # LLM walk-forward window start (UTC)
-# One-month window for the free-tier Gemini run (~650 calls < 1,000 req/day quota).
-# Widen by restoring BACKTEST_END = 2026-06-06 — START stays anchored so February's
-# contexts hash identically and replay from cache. (END is EXCLUSIVE; store ends 06-05.)
-BACKTEST_END     = pd.Timestamp("2026-03-01")
+# Window is BOT_START/BOT_END env-overridable for one-off runs without editing the
+# notebook. Defaults: the February local-LLM window. START stays anchored across
+# widenings so completed contexts hash identically and replay from cache.
+# (END is EXCLUSIVE; the store ends 2026-06-05.)
+BACKTEST_START   = pd.Timestamp(os.environ.get("BOT_START", "2026-02-01"))
+BACKTEST_END     = pd.Timestamp(os.environ.get("BOT_END", "2026-03-01"))
 WF_FOLD_FREQ     = "MS"                         # walk-forward folds: month starts
 LIVE_FORWARD_DAYS = 3                           # live-forward mode replays the last N trading days
 

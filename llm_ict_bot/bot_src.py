@@ -116,11 +116,12 @@ MAX_CONSEC_LOSSES = 5       # pause new entries for the rest of the day after N 
 # cover the full store. The LLM walk-forward window is bounded by per-call latency:
 # measured ~35-45s/call for local llama3.1:8b on this 16GB machine vs ~1-2s for the
 # Gemini API. Widen the window freely — the context-hash cache replays completed calls.
-BACKTEST_START   = pd.Timestamp("2026-02-01")   # LLM walk-forward window start (UTC)
-# One-month window for the free-tier Gemini run (~650 calls < 1,000 req/day quota).
-# Widen by restoring BACKTEST_END = 2026-06-06 — START stays anchored so February's
-# contexts hash identically and replay from cache. (END is EXCLUSIVE; store ends 06-05.)
-BACKTEST_END     = pd.Timestamp("2026-03-01")
+# Window is BOT_START/BOT_END env-overridable for one-off runs without editing the
+# notebook. Defaults: the February local-LLM window. START stays anchored across
+# widenings so completed contexts hash identically and replay from cache.
+# (END is EXCLUSIVE; the store ends 2026-06-05.)
+BACKTEST_START   = pd.Timestamp(os.environ.get("BOT_START", "2026-02-01"))
+BACKTEST_END     = pd.Timestamp(os.environ.get("BOT_END", "2026-03-01"))
 WF_FOLD_FREQ     = "MS"                         # walk-forward folds: month starts
 LIVE_FORWARD_DAYS = 3                           # live-forward mode replays the last N trading days
 
@@ -1795,7 +1796,8 @@ def llm_ready() -> bool:
         print(f"Gemini healthcheck failed: {e!r}")
         return False
 
-LLM_READY = llm_ready()
+SKIP_LLM = bool(os.environ.get("BOT_SKIP_LLM"))   # rule-baseline-only run
+LLM_READY = (not SKIP_LLM) and llm_ready()
 DO_REAL = HAVE_REAL_DATA and not RUN_SMOKE_ONLY
 DO_LLM = DO_REAL and LLM_READY
 print(f"real data: {HAVE_REAL_DATA} | {LLM_MODEL_ID} ready: {LLM_READY} "
@@ -1853,9 +1855,10 @@ if DO_LLM:
           f"(cache {_c['cache_hits']:,}), orders {_c['orders']}, gated {_c['gated']}, "
           f"rejected {_c['validator_rejected']}, llm errors {_c['llm_errors']}")
 elif DO_REAL:
-    print(f"{LLM_MODEL_ID} not ready — LLM walk-forward skipped. For Gemini: export "
-          "GEMINI_API_KEY. For Ollama: start `ollama serve` and pull the model.")
-    RESULTS["llm_ict"] = sm_res
+    print("LLM walk-forward skipped "
+          + ("(BOT_SKIP_LLM set — rule baseline + buy-and-hold only)." if SKIP_LLM else
+             f"({LLM_MODEL_ID} not ready. For Gemini: export GEMINI_API_KEY. "
+             "For Ollama: start `ollama serve` and pull the model)."))
 else:
     RESULTS["llm_ict"] = sm_res          # smoke stand-in so reporting always renders
 
@@ -1999,6 +2002,11 @@ _save(fig, "trades"); plt.show()
 
 # %%
 def build_verdict() -> str:
+    if "llm_ict" not in RESULTS:
+        rule = compute_metrics(RESULTS["rule_ict"])
+        return (f"LLM layer deliberately skipped for this run (BOT_SKIP_LLM) — mechanical "
+                f"rule baseline and buy-and-hold only. Rule baseline: "
+                f"{rule['total_return_pct']:+.2f}% over {rule['trades']} trades.")
     llm = compute_metrics(RESULTS["llm_ict"])
     rule = compute_metrics(RESULTS["rule_ict"])
     llm_real = DO_LLM and RESULTS["llm_ict"]["label"] == "llm_ict"
@@ -2060,13 +2068,13 @@ def _b64(p: Path) -> str:
 counters_df = pd.DataFrame({res["label"]: res["counters"] for res in RESULTS.values()
                             if res["counters"]}).fillna(0).astype(int)
 halts_flat = [{"strategy": res["label"], **h} for res in RESULTS.values() for h in res["halts"]]
-folds_html = RESULTS["llm_ict"]["folds"].to_html(index=False) \
-    if "folds" in RESULTS["llm_ict"] else None
+_ref = RESULTS.get("llm_ict", RESULTS["rule_ict"])    # window/fold reference strategy
+folds_html = _ref["folds"].to_html(index=False) if "folds" in _ref else None
 
 html = _REPORT_TMPL.render(
     run_id=RUN_ID, mode=RUN_MODE,
-    start=str(RESULTS["llm_ict"]["curve"].index.min().date()),
-    end=str(RESULTS["llm_ict"]["curve"].index.max().date()),
+    start=str(_ref["curve"].index.min().date()),
+    end=str(_ref["curve"].index.max().date()),
     model=LLM_MODEL_ID, seed=ACTIVE_LLM_PARAMS.get("seed"), dec_tf=DECISION_TF,
     spread=SPREAD_PIPS, risk=int(RISK_PCT * 100), rr=int(RR_TARGET), gate=CONF_THRESHOLD,
     verdict=VERDICT,

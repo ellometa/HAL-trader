@@ -69,6 +69,11 @@ _save(fig, "trades"); plt.show()
 
 # %%
 def build_verdict() -> str:
+    if "llm_ict" not in RESULTS:
+        rule = compute_metrics(RESULTS["rule_ict"])
+        return (f"LLM layer deliberately skipped for this run (BOT_SKIP_LLM) — mechanical "
+                f"rule baseline and buy-and-hold only. Rule baseline: "
+                f"{rule['total_return_pct']:+.2f}% over {rule['trades']} trades.")
     llm = compute_metrics(RESULTS["llm_ict"])
     rule = compute_metrics(RESULTS["rule_ict"])
     llm_real = DO_LLM and RESULTS["llm_ict"]["label"] == "llm_ict"
@@ -130,13 +135,13 @@ def _b64(p: Path) -> str:
 counters_df = pd.DataFrame({res["label"]: res["counters"] for res in RESULTS.values()
                             if res["counters"]}).fillna(0).astype(int)
 halts_flat = [{"strategy": res["label"], **h} for res in RESULTS.values() for h in res["halts"]]
-folds_html = RESULTS["llm_ict"]["folds"].to_html(index=False) \
-    if "folds" in RESULTS["llm_ict"] else None
+_ref = RESULTS.get("llm_ict", RESULTS["rule_ict"])    # window/fold reference strategy
+folds_html = _ref["folds"].to_html(index=False) if "folds" in _ref else None
 
 html = _REPORT_TMPL.render(
     run_id=RUN_ID, mode=RUN_MODE,
-    start=str(RESULTS["llm_ict"]["curve"].index.min().date()),
-    end=str(RESULTS["llm_ict"]["curve"].index.max().date()),
+    start=str(_ref["curve"].index.min().date()),
+    end=str(_ref["curve"].index.max().date()),
     model=LLM_MODEL_ID, seed=ACTIVE_LLM_PARAMS.get("seed"), dec_tf=DECISION_TF,
     spread=SPREAD_PIPS, risk=int(RISK_PCT * 100), rr=int(RR_TARGET), gate=CONF_THRESHOLD,
     verdict=VERDICT,

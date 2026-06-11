@@ -32,7 +32,8 @@ def llm_ready() -> bool:
         print(f"Gemini healthcheck failed: {e!r}")
         return False
 
-LLM_READY = llm_ready()
+SKIP_LLM = bool(os.environ.get("BOT_SKIP_LLM"))   # rule-baseline-only run
+LLM_READY = (not SKIP_LLM) and llm_ready()
 DO_REAL = HAVE_REAL_DATA and not RUN_SMOKE_ONLY
 DO_LLM = DO_REAL and LLM_READY
 print(f"real data: {HAVE_REAL_DATA} | {LLM_MODEL_ID} ready: {LLM_READY} "
@@ -90,9 +91,10 @@ if DO_LLM:
           f"(cache {_c['cache_hits']:,}), orders {_c['orders']}, gated {_c['gated']}, "
           f"rejected {_c['validator_rejected']}, llm errors {_c['llm_errors']}")
 elif DO_REAL:
-    print(f"{LLM_MODEL_ID} not ready — LLM walk-forward skipped. For Gemini: export "
-          "GEMINI_API_KEY. For Ollama: start `ollama serve` and pull the model.")
-    RESULTS["llm_ict"] = sm_res
+    print("LLM walk-forward skipped "
+          + ("(BOT_SKIP_LLM set — rule baseline + buy-and-hold only)." if SKIP_LLM else
+             f"({LLM_MODEL_ID} not ready. For Gemini: export GEMINI_API_KEY. "
+             "For Ollama: start `ollama serve` and pull the model)."))
 else:
     RESULTS["llm_ict"] = sm_res          # smoke stand-in so reporting always renders
 
