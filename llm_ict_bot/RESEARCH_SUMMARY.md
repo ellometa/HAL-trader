@@ -179,6 +179,36 @@ simple ratio here. (3) Decomposed honestly, **all three are flat out-of-sample**
 +0.2%, dead); the 5-year headlines are entirely the favorable 2021-2024 trend regime,
 not a durable edge. The verdict is unchanged across six tests and three strategy families.
 
+## Test 7 — Improving SLIPSTREAM (first genuine OOS improvement)
+
+Diagnosis of base SLIPSTREAM: (a) regime-dependent — *all* profit came from the 2023-24
+trend years; (b) the **long side loses** (longs −0.05 avg R / 40% win vs shorts +0.40 /
+60%). Reddit/SMC research suggested four levers, each tested as an isolated variant over
+5 years (no breakers, full curves):
+
+| variant | lever | full 5yr | in-sample | **OOS 25-26** | OOS trades | OOS win% |
+|---|---|---|---|---|---|---|
+| SLIPSTREAM | control | +15.9% | +14.4% | +1.3% | 20 | 45% |
+| **SLIP-ADX** | skip chop (1h ADX>22) | +8.1% | +0.8% | **+7.2%** | 10 | **70%** |
+| SLIP-RUNNER | 3R target | +13.4% | +11.0% | +2.1% | 19 | 32% |
+| SLIP-BREAKEVEN | stop→entry at 1R | +9.4% | +9.0% | +0.4% | 20 | 35% |
+| SLIP-SHORT | shorts only | +17.2% | +12.9% | +3.8% | 13 | 54% |
+| SLIP-FUSION | 2R+ADX+short+BE | +6.8% | +3.0% | +3.7% | 7 | 43% |
+
+**Findings.** (1) **The ADX trend-strength filter is the first change in the project that
+worked *better* out-of-sample than in-sample** (+7.2% OOS vs +0.8% in-sample, 70% win) —
+the opposite of the overfitting signature seen everywhere else. It cut trades ~half by
+skipping chop, exactly as a real filter should. (2) **SLIP-SHORT confirmed the
+diagnosis** — dropping the losing longs lifted every metric (best full-period PF 1.82,
+Sharpe 0.76; +3.8% OOS). (3) **Break-even *hurt*** (+0.4% OOS) — it stops out trades that
+later recover, as predicted. (4) RUNNER (3R) added drawdown without OOS benefit.
+
+**Honest caveat.** These are encouraging but **thin** — SLIP-ADX rests on 10 OOS trades, a
+70% win rate there has a wide confidence interval, and only a 1-pip spread is modeled.
+This is the first real signal that an edge *might* exist (regime-filtered, short-biased
+trend continuation), not proof of one. Next step would be confirming the ADX filter on
+more data / a rolling walk-forward before any trust.
+
 ---
 
 ## Conclusion
