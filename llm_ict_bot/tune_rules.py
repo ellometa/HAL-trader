@@ -124,7 +124,7 @@ def build_tables(prep: dict) -> dict:
         "disp_up": EventTable(d15["displacement"][d15["displacement"]["direction"] == "bullish"]),
         "disp_dn": EventTable(d15["displacement"][d15["displacement"]["direction"] == "bearish"]),
     }
-    for tf in ("1h", "4h"):
+    for tf in ("15min", "1h", "4h"):
         sw = prep["dets"][tf]["swings"]
         tabs[f"swing_hi_{tf}"] = EventTable(sw[sw["kind"] == "high"], ("level",))
         tabs[f"swing_lo_{tf}"] = EventTable(sw[sw["kind"] == "low"], ("level",))
@@ -134,17 +134,24 @@ def build_tables(prep: dict) -> dict:
 # ---------------------------------------------------------------- parameters
 @dataclasses.dataclass(frozen=True)
 class RuleParams:
-    sweep_window_h: float = 3.0       # max sweep age (current: RULE_SWEEP_WINDOW = 3h)
+    # strategy family:
+    #   "reversal" — fade a sweep: sweep -> opposite structure shift -> trade reversion
+    #                (stop beyond the sweep wick). The shipped rule_ict.
+    #   "breakout" — trade WITH momentum: a recent 15m displacement sets direction,
+    #                trade its way, stop beyond the last opposing 15m swing.
+    strategy: str = "reversal"
+    sweep_window_h: float = 3.0       # signal lookback (sweep age, or displacement age)
     killzone_only: bool = False       # decisions 07:00-10:00 ET only (vs full session)
-    shift_kinds: str = "both"         # "both" = CHoCH+BOS (current) | "choch" = CHoCH only
-    pd_tf: str = "1h"                 # premium/discount source: "1h" (current)|"4h"|"off"
-    need_fvg: bool = False            # require a same-direction 15m FVG after the sweep
-    need_disp: bool = False           # require same-direction 15m displacement after sweep
-    rr_target: float = 2.0            # TP at rr_target * risk (current: 2.0)
-    min_stop_pips: float = 5.0        # reject thinner stops (current: 5)
+    shift_kinds: str = "both"         # "both" = CHoCH+BOS | "choch" = CHoCH only
+    pd_tf: str = "1h"                 # premium/discount source: "1h"|"4h"|"off"
+    need_fvg: bool = False            # require a same-direction 15m FVG after the signal
+    need_disp: bool = False           # require a (further) same-dir displacement after signal
+    rr_target: float = 2.0            # TP at rr_target * risk
+    min_stop_pips: float = 5.0        # reject thinner stops
 
     def label(self) -> str:
-        return (f"W{self.sweep_window_h:g}h_{'KZ' if self.killzone_only else 'SES'}_"
+        fam = "REV" if self.strategy == "reversal" else "BRK"
+        return (f"{fam}_W{self.sweep_window_h:g}h_{'KZ' if self.killzone_only else 'SES'}_"
                 f"{self.shift_kinds}_pd{self.pd_tf}_fvg{int(self.need_fvg)}_"
                 f"disp{int(self.need_disp)}_rr{self.rr_target:g}_ms{self.min_stop_pips:g}")
 
@@ -173,7 +180,7 @@ def evaluate(prep: dict, tabs: dict, p: RuleParams,
     sw = tabs["sweeps"]
     week_starts = np.array([context_week_start(pd.Timestamp(t)) for t in slot_t],
                            dtype="datetime64[ns]")
-    sweep_w = np.timedelta64(int(p.sweep_window_h * 3600), "s")
+    sig_w = np.timedelta64(int(p.sweep_window_h * 3600), "s")
     spread = SPREAD_PIPS * PIP
 
     trades = []
@@ -182,24 +189,43 @@ def evaluate(prep: dict, tabs: dict, p: RuleParams,
         t = slot_t[k]
         if t <= busy_until:
             continue
-        i = sw.last_visible(t, t - sweep_w)
-        if i is None:
-            continue
-        s_time, s_side, s_wick = sw.time[i], sw.cols["side"][i], sw.cols["wick_extreme"][i]
-        want = "long" if s_side == "sellside" else "short"
+        price = slot_px[k]
+
+        # --- signal: direction (want), the confluence anchor time, and the stop anchor
+        if p.strategy == "reversal":
+            i = sw.last_visible(t, t - sig_w)
+            if i is None:
+                continue
+            anchor_t, side, wick = sw.time[i], sw.cols["side"][i], sw.cols["wick_extreme"][i]
+            want = "long" if side == "sellside" else "short"
+            sl_ref = wick                                     # stop beyond the sweep wick
+        else:  # breakout — most recent 15m displacement within the window sets direction
+            iu = tabs["disp_up"].last_visible(t, t - sig_w)
+            idn = tabs["disp_dn"].last_visible(t, t - sig_w)
+            cand = []
+            if iu is not None:
+                cand.append((tabs["disp_up"].time[iu], "long"))
+            if idn is not None:
+                cand.append((tabs["disp_dn"].time[idn], "short"))
+            if not cand:
+                continue
+            anchor_t, want = max(cand, key=lambda x: x[0])    # the latest displacement
+            stab = tabs[f"swing_lo_15min" if want == "long" else "swing_hi_15min"]
+            si = stab.last_visible(t, week_starts[k])         # opposing 15m swing = stop
+            if si is None:
+                continue
+            sl_ref = stab.cols["level"][si]
 
         if p.shift_kinds == "both":
             stab = tabs["struct_up" if want == "long" else "struct_dn"]
         else:
             stab = tabs["choch_up" if want == "long" else "choch_dn"]
-        if not stab.any_after(s_time, t):
+        if not stab.any_after(anchor_t, t):
             continue
-        if p.need_fvg and not tabs["fvg_up" if want == "long" else "fvg_dn"].any_after(s_time, t):
+        if p.need_fvg and not tabs["fvg_up" if want == "long" else "fvg_dn"].any_after(anchor_t, t):
             continue
-        if p.need_disp and not tabs["disp_up" if want == "long" else "disp_dn"].any_after(s_time, t):
+        if p.need_disp and not tabs["disp_up" if want == "long" else "disp_dn"].any_after(anchor_t, t):
             continue
-
-        price = slot_px[k]
         if p.pd_tf != "off":
             hi_i = tabs[f"swing_hi_{p.pd_tf}"].last_visible(t, week_starts[k])
             lo_i = tabs[f"swing_lo_{p.pd_tf}"].last_visible(t, week_starts[k])
@@ -215,10 +241,10 @@ def evaluate(prep: dict, tabs: dict, p: RuleParams,
             if want == "short" and not pos > 0.55:       # premium
                 continue
 
-        sl = s_wick - RULE_SL_BUFFER_PIPS * PIP if want == "long" \
-            else s_wick + RULE_SL_BUFFER_PIPS * PIP
+        sl = sl_ref - RULE_SL_BUFFER_PIPS * PIP if want == "long" \
+            else sl_ref + RULE_SL_BUFFER_PIPS * PIP
         risk = (price - sl) if want == "long" else (sl - price)
-        if risk < p.min_stop_pips * PIP:
+        if risk < p.min_stop_pips * PIP:        # also rejects wrong-side stops (risk<=0)
             continue
 
         # fill at next 1m open; SL-first pessimism inside each bar
@@ -270,9 +296,9 @@ def evaluate(prep: dict, tabs: dict, p: RuleParams,
 
 
 # ---------------------------------------------------------------- grid
-def full_grid() -> list[RuleParams]:
+def full_grid(strategy: str = "reversal") -> list[RuleParams]:
     g = itertools.product(
-        (2.0, 3.0, 6.0),          # sweep_window_h
+        (2.0, 3.0, 6.0),          # sweep_window_h (signal lookback)
         (False, True),            # killzone_only
         ("both", "choch"),        # shift_kinds
         ("1h", "4h", "off"),      # pd_tf
@@ -281,12 +307,13 @@ def full_grid() -> list[RuleParams]:
         (1.5, 2.0, 3.0),          # rr_target
         (5.0, 8.0),               # min_stop_pips
     )
-    return [RuleParams(*c) for c in g]
+    return [RuleParams(strategy, *c) for c in g]
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--window", choices=("tune", "oos"), default="tune")
+    ap.add_argument("--family", choices=("reversal", "breakout"), default="reversal")
     ap.add_argument("--quick", action="store_true", help="baseline + a few variants only")
     ap.add_argument("--configs", help="JSON file of param dicts (for --window oos)")
     args = ap.parse_args()
@@ -296,16 +323,17 @@ def main() -> None:
     prep = prepare_window(start, end)
     tabs = build_tables(prep)
 
+    base = dataclasses.replace(BASELINE, strategy=args.family)
     if args.configs:
         cfgs = [RuleParams(**d) for d in json.load(open(args.configs))]
     elif args.quick:
-        cfgs = [BASELINE,
-                dataclasses.replace(BASELINE, killzone_only=True),
-                dataclasses.replace(BASELINE, need_disp=True),
-                dataclasses.replace(BASELINE, pd_tf="4h")]
+        cfgs = [base,
+                dataclasses.replace(base, killzone_only=True),
+                dataclasses.replace(base, need_disp=True),
+                dataclasses.replace(base, pd_tf="4h")]
     else:
-        cfgs = full_grid()
-    print(f"evaluating {len(cfgs)} configs...")
+        cfgs = full_grid(args.family)
+    print(f"evaluating {len(cfgs)} {args.family} configs...")
 
     t0, rows = time.time(), []
     for n, p in enumerate(cfgs, 1):
@@ -315,12 +343,12 @@ def main() -> None:
         if n % 100 == 0 or n == len(cfgs):
             print(f"  {n}/{len(cfgs)} ({time.time()-t0:.0f}s)")
     df = pd.DataFrame(rows).drop(columns=["params"])
-    out_csv = TUNE_DIR / f"grid_{args.window}.csv"
+    out_csv = TUNE_DIR / f"grid_{args.family}_{args.window}.csv"
     pd.DataFrame(rows).to_csv(out_csv, index=False)
     print(f"\nsaved {out_csv}")
 
-    print("\n=== baseline (shipped rule_ict) ===")
-    print(df[df["label"] == BASELINE.label()].to_string(index=False))
+    print(f"\n=== {args.family} baseline ===")
+    print(df[df["label"] == base.label()].to_string(index=False))
     keep = df[(df["trades"] >= 40) & (df["years_pos"] >= 3) & (df["pf"] >= 1.15)] \
         if args.window == "tune" else df
     print(f"\n=== robust configs (trades>=40, years_pos>=3, pf>=1.15): {len(keep)} ===")

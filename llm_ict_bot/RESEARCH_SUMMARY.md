@@ -102,24 +102,48 @@ of the ~33% a 2R strategy needs to break even (PF 0.75 — returns 75¢ per doll
 risked). Max drawdown equals total return: it bled to its low at the endpoint with no
 recovery. **Holding EUR/USD beat the "smart" rules by 21 percentage points.**
 
+## Test 4 — Breakout/continuation family (opposite hypothesis)
+
+The 2-year data hinted that this period rewarded trend exposure, so a second strategy
+family was added to the harness: trade *with* a recent 15m displacement (momentum)
+instead of fading a sweep, stop beyond the last opposing 15m swing. Same 864-config
+grid, same tune (2021-2024) / validate-once (2025-2026) protocol.
+
+| stage | result |
+|---|---|
+| in-sample | **47 robust survivors** (vs 16 for reversal); best +31.7R, PF 1.31, positive all 4 years |
+| out-of-sample (best) | +2.3R, **PF 1.05**, win rate 43% |
+| out-of-sample (top in-sample config) | +1.1R, **PF 1.02** — a ~95% decay from its +31.7R in-sample |
+
+**This is a different result from reversal, but not a success.** Breakout held
+*marginally positive* OOS (PF ~1.02-1.05) where every reversal config went firmly
+negative (PF 0.53-0.72) — trend-continuation has a faint pulse where mean-reversion
+was dead. But the in-sample edge decayed ~95%, and a PF near 1.03 on ~80 trades is
+within noise of break-even; with only a 1-pip spread modeled, realistic slippage
+would likely erase it. **Verdict: directionally interesting, not a tradeable edge.**
+
 ---
 
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
    sweep-reversal on EUR/USD intraday has negative expectancy across a large,
-   honest sample.
+   honest sample; the opposite (breakout/continuation) is at best break-even.
 2. **An LLM cannot rescue a negative-expectancy signal.** Filtering bad trades
    harder does not make them good; the LLM would need to *be* the entire edge,
    and at 8B/3B local scale it was not.
-3. **The framework is sound and reusable.** Leakage-safe engine, verified cost and
+3. **In-sample never survived out-of-sample.** Both families produced dozens of
+   configs profitable across four tune years; reversal then went negative and
+   breakout decayed to break-even on untouched data. On EUR/USD 15m, in-sample
+   confluence performance was not predictive — a result worth knowing in itself.
+4. **The framework is sound and reusable.** Leakage-safe engine, verified cost and
    risk modeling, and a screening harness that tune-and-validates a strategy family
    over four years in minutes.
 
-**What would be productive next** (the harness makes each a fast screen):
-trend/breakout continuation logic (the opposite of what failed — the 2-year data
-shows this period rewarded trend exposure); a less efficient instrument (BTC data is
-in the repo); or a longer horizon (daily bars, where a 1-pip spread becomes noise).
+**What would be productive next** (the harness makes each a fast screen): a less
+efficient instrument (BTC data is in the repo); or a longer horizon (daily bars,
+where a 1-pip spread becomes noise and trend persistence is stronger). More tuning of
+these intraday EUR/USD families is not worth the compute.
 
 *One window, one pair, paper costs — every result here carries that caveat. The
 finding is "this strategy family failed every test we ran," not "no strategy can
