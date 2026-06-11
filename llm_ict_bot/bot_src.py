@@ -107,9 +107,13 @@ GEMINI_PARAMS    = {"temperature": 0, "topP": 1, "seed": 42, "maxOutputTokens": 
 LLM_MODEL_ID     = f"{LLM_PROVIDER}:{GEMINI_MODEL if LLM_PROVIDER == 'gemini' else OLLAMA_MODEL}"
 
 # ----------------------------------------------------------------------------- risk circuit breakers
-DAILY_LOSS_LIMIT  = 0.03    # halt new entries for the day at -3% of start-of-day equity
-MAX_DRAWDOWN_HALT = 0.15    # hard-stop the whole run at -15% peak-to-trough
-MAX_CONSEC_LOSSES = 5       # pause new entries for the rest of the day after N straight losses
+# BOT_NO_BREAKERS=1 lifts the halts (limits → effectively infinite) to expose the raw
+# signal trajectory over a long window — the spec'd defaults otherwise hard-stop the
+# whole run at -15% peak-to-trough, which on a losing strategy ends trading early.
+_NO_BRK = bool(os.environ.get("BOT_NO_BREAKERS"))
+DAILY_LOSS_LIMIT  = 99.0 if _NO_BRK else 0.03   # halt new entries for the day at -3% SOD equity
+MAX_DRAWDOWN_HALT = 99.0 if _NO_BRK else 0.15   # hard-stop the whole run at -15% peak-to-trough
+MAX_CONSEC_LOSSES = 10**9 if _NO_BRK else 5     # pause entries for the day after N straight losses
 
 # ----------------------------------------------------------------------------- run window
 # The deterministic parts (cleaning, detectors, rule-only baseline) are cheap and can
