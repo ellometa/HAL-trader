@@ -155,6 +155,30 @@ is within noise, and only a 1-pip spread is modeled. The in-sample→OOS decay p
 improvement that lifts the strategy from "loses money" to "roughly break-even," but does
 not clear the bar for a deployable edge on this evidence.
 
+## Test 6 — Three named strategies, 5-year head-to-head
+
+Forum research (ForexFactory ICT threads, Judas Swing) produced two new strategies to
+run beside the tuned one, over 2021-06 → 2026-06:
+- **SLIPSTREAM** — breakout + 1h HTF bias, fixed 1.5R (the Test 5 winner; *tuned* on 2021-24).
+- **MIDNIGHT RAID** — ICT Judas Swing: 00:00-05:00 ET, sweep the NY midnight open against
+  1h bias, reverse on MSS, target previous-day high/low. *Fixed ICT defaults, untuned.*
+- **BLOODHOUND** — SLIPSTREAM entry with previous-day-H/L liquidity targets. *Untuned.*
+
+| strategy | full 5yr | in-sample 21-24 | **OOS 25-26** | note |
+|---|---|---|---|---|
+| SLIPSTREAM | +15.9% | +14.4% | **+1.3%** | tuned; gains are in-sample |
+| BLOODHOUND | +7.4% | +7.2% | **+0.2%** | flat OOS |
+| MIDNIGHT RAID | −8.0% | −8.0% | **dead** | hit 15% drawdown halt May 2022, never traded again |
+| buy-and-hold | −5.3% | — | — | passive |
+
+**Findings.** (1) The forum-celebrated **Judas Swing was the worst** — it self-destructed
+into the drawdown halt in 11 months, the same month the original reversal rules did.
+Forum popularity is not edge. (2) **Liquidity targets (BLOODHOUND) did not beat a fixed
+1.5R** (SLIPSTREAM) — the ICT "target the opposing liquidity" claim underperformed a
+simple ratio here. (3) Decomposed honestly, **all three are flat out-of-sample** (+1.3%,
++0.2%, dead); the 5-year headlines are entirely the favorable 2021-2024 trend regime,
+not a durable edge. The verdict is unchanged across six tests and three strategy families.
+
 ---
 
 ## Conclusion
