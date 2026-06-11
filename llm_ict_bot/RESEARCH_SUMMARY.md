@@ -122,6 +122,13 @@ was dead. But the in-sample edge decayed ~95%, and a PF near 1.03 on ~80 trades 
 within noise of break-even; with only a 1-pip spread modeled, realistic slippage
 would likely erase it. **Verdict: directionally interesting, not a tradeable edge.**
 
+A follow-up probe added a 1:1 RR target (the grid had only tested 1.5/2/3). In-sample
+the 1:1 breakout configs hit ~57% win rate (PF 1.2-1.25, above the 50% break-even a
+1:1 target needs), but OOS the win rate decayed to ~48% and all finalists went
+*negative* (PF 0.83-0.88) — worse than the 1.5R version. The lesson is structural:
+at 1:1 there is no reward asymmetry to cushion the win-rate decay that overfitting
+always produced, so it falls straight below break-even. Lower RR did not help.
+
 ---
 
 ## Conclusion

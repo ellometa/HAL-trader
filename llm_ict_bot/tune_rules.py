@@ -304,7 +304,7 @@ def full_grid(strategy: str = "reversal") -> list[RuleParams]:
         ("1h", "4h", "off"),      # pd_tf
         (False, True),            # need_fvg
         (False, True),            # need_disp
-        (1.5, 2.0, 3.0),          # rr_target
+        (1.0, 1.5, 2.0, 3.0),     # rr_target
         (5.0, 8.0),               # min_stop_pips
     )
     return [RuleParams(strategy, *c) for c in g]
