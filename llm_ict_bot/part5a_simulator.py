@@ -128,7 +128,9 @@ def run_engine(df_1m: pd.DataFrame, tf_store: dict, det_store: dict,
                             "stop_loss": p["stop_loss"], "take_profit": p["take_profit"],
                             "units": units, "risk_usd": risk_usd,
                             "confidence": p["confidence"], "reasoning": p["reasoning"],
-                            "decided_at": p["decided_at"]}
+                            "decided_at": p["decided_at"],
+                            "breakeven_at_r": p.get("breakeven_at_r"),  # trade management
+                            "init_risk": abs(fill - p["stop_loss"]), "be_moved": False}
                 counters["fills"] += 1
                 if verbose:
                     print(f"  [{times[i]}] FILL {p['direction']} @ {fill:.5f} "
@@ -148,6 +150,14 @@ def run_engine(df_1m: pd.DataFrame, tf_store: dict, det_store: dict,
                     close_trade(i, position["stop_loss"], "SL")
                 elif l[i] <= position["take_profit"]:
                     close_trade(i, position["take_profit"], "TP")
+        # 2b · break-even: once price runs breakeven_at_r in favour, move SL to entry
+        #      (applied at bar close → takes effect next bar, avoids intrabar ambiguity)
+        if position is not None and position.get("breakeven_at_r") and not position["be_moved"]:
+            rd = position["init_risk"]
+            if position["direction"] == "long" and h[i] >= position["entry"] + position["breakeven_at_r"] * rd:
+                position["stop_loss"], position["be_moved"] = position["entry"], True
+            elif position["direction"] == "short" and l[i] <= position["entry"] - position["breakeven_at_r"] * rd:
+                position["stop_loss"], position["be_moved"] = position["entry"], True
 
         bt = bar_close[i]
         # 3 · decision slot at a session 15m close, flat & unblocked, breakers willing
@@ -185,7 +195,8 @@ def run_engine(df_1m: pd.DataFrame, tf_store: dict, det_store: dict,
                 else:
                     pending = {"direction": plan.direction, "stop_loss": plan.stop_loss,
                                "take_profit": plan.take_profit, "confidence": plan.confidence,
-                               "reasoning": plan.reasoning, "decided_at": t}
+                               "reasoning": plan.reasoning, "decided_at": t,
+                               "breakeven_at_r": res.get("breakeven_at_r")}
                     counters["orders"] += 1
                     if verbose:
                         print(f"[{t}] ORDER {plan.direction} conf {plan.confidence} — "

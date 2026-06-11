@@ -1454,7 +1454,9 @@ def run_engine(df_1m: pd.DataFrame, tf_store: dict, det_store: dict,
                             "stop_loss": p["stop_loss"], "take_profit": p["take_profit"],
                             "units": units, "risk_usd": risk_usd,
                             "confidence": p["confidence"], "reasoning": p["reasoning"],
-                            "decided_at": p["decided_at"]}
+                            "decided_at": p["decided_at"],
+                            "breakeven_at_r": p.get("breakeven_at_r"),  # trade management
+                            "init_risk": abs(fill - p["stop_loss"]), "be_moved": False}
                 counters["fills"] += 1
                 if verbose:
                     print(f"  [{times[i]}] FILL {p['direction']} @ {fill:.5f} "
@@ -1474,6 +1476,14 @@ def run_engine(df_1m: pd.DataFrame, tf_store: dict, det_store: dict,
                     close_trade(i, position["stop_loss"], "SL")
                 elif l[i] <= position["take_profit"]:
                     close_trade(i, position["take_profit"], "TP")
+        # 2b · break-even: once price runs breakeven_at_r in favour, move SL to entry
+        #      (applied at bar close → takes effect next bar, avoids intrabar ambiguity)
+        if position is not None and position.get("breakeven_at_r") and not position["be_moved"]:
+            rd = position["init_risk"]
+            if position["direction"] == "long" and h[i] >= position["entry"] + position["breakeven_at_r"] * rd:
+                position["stop_loss"], position["be_moved"] = position["entry"], True
+            elif position["direction"] == "short" and l[i] <= position["entry"] - position["breakeven_at_r"] * rd:
+                position["stop_loss"], position["be_moved"] = position["entry"], True
 
         bt = bar_close[i]
         # 3 · decision slot at a session 15m close, flat & unblocked, breakers willing
@@ -1511,7 +1521,8 @@ def run_engine(df_1m: pd.DataFrame, tf_store: dict, det_store: dict,
                 else:
                     pending = {"direction": plan.direction, "stop_loss": plan.stop_loss,
                                "take_profit": plan.take_profit, "confidence": plan.confidence,
-                               "reasoning": plan.reasoning, "decided_at": t}
+                               "reasoning": plan.reasoning, "decided_at": t,
+                               "breakeven_at_r": res.get("breakeven_at_r")}
                     counters["orders"] += 1
                     if verbose:
                         print(f"[{t}] ORDER {plan.direction} conf {plan.confidence} — "
@@ -1819,6 +1830,104 @@ def make_breakout_liq_decide_fn(det_store: dict, tf_store: dict, htf_bias_tf: st
     return decide
 
 
+# --- SLIPSTREAM improvement variants ------------------------------------------------
+# Diagnosis of base SLIPSTREAM: regime-dependent (all profit in 2023-24 trend years),
+# and the long side loses while shorts win. Research-backed levers (Reddit/SMC/ICT):
+# ADX trend-strength filter (skip chop), let winners run (higher RR), break-even stop
+# (free trade), directional selectivity. Each variant isolates one lever.
+
+def _adx_lookup(tf_store: dict, tf: str = "1h", period: int = 14):
+    """Point-in-time Wilder ADX on `tf`: f(t) -> latest ADX with close_time <= t."""
+    df = tf_store[tf]
+    h, l, c = df["high"].to_numpy(), df["low"].to_numpy(), df["close"].to_numpy()
+    n = len(df)
+    tr = np.zeros(n); pdm = np.zeros(n); mdm = np.zeros(n)
+    up = h[1:] - h[:-1]; dn = l[:-1] - l[1:]
+    pdm[1:] = np.where((up > dn) & (up > 0), up, 0.0)
+    mdm[1:] = np.where((dn > up) & (dn > 0), dn, 0.0)
+    tr[1:] = np.maximum.reduce([h[1:] - l[1:], np.abs(h[1:] - c[:-1]), np.abs(l[1:] - c[:-1])])
+
+    def wilder(x):
+        out = np.zeros(n)
+        if n <= period:
+            return out
+        out[period] = x[1:period + 1].sum()
+        for i in range(period + 1, n):
+            out[i] = out[i - 1] - out[i - 1] / period + x[i]
+        return out
+
+    atr, spdm, smdm = wilder(tr), wilder(pdm), wilder(mdm)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pdi, mdi = 100 * spdm / atr, 100 * smdm / atr
+        dx = np.nan_to_num(100 * np.abs(pdi - mdi) / (pdi + mdi))
+    adx = np.zeros(n)
+    if n > 2 * period:
+        adx[2 * period] = dx[period + 1:2 * period + 1].mean()
+        for i in range(2 * period + 1, n):
+            adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period
+    ct = df["close_time"].to_numpy(dtype="datetime64[ns]")
+    def f(t):
+        i = int(np.searchsorted(ct, np.datetime64(t), side="right")) - 1
+        return adx[i] if i >= 0 else 0.0
+    return f
+
+
+def make_slipstream_variant_fn(det_store: dict, tf_store: dict, *, rr: float = 1.5,
+                               adx_min: float = 0.0, adx_tf: str = "1h", side: str = "both",
+                               breakeven_at_r=None, htf_bias_tf: str = "1h",
+                               pd_tf: str = "4h") -> Callable:
+    d15, dbias, dpd = det_store["15min"], det_store[htf_bias_tf], det_store[pd_tf]
+    adx_f = _adx_lookup(tf_store, adx_tf) if adx_min > 0 else None
+
+    def decide(ctx_provider, price, t):
+        none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+        if not (7 * 60 <= _et_minute(t) < 16 * 60):
+            return none
+        disp = visible(d15["displacement"], t, since=t - BRK_SIGNAL_WINDOW)
+        if disp.empty:
+            return none
+        want = "long" if disp.iloc[-1]["direction"] == "bullish" else "short"
+        if side != "both" and want != side:                  # directional selectivity
+            return none
+        d_time = disp.iloc[-1]["time"]
+        bias = visible(dbias["structure"], t)
+        if bias.empty:
+            return none
+        trend = bias.iloc[-1]["trend_after"]
+        if (want == "long" and trend != 1) or (want == "short" and trend != -1):
+            return none
+        if adx_f is not None and adx_f(t) < adx_min:          # trend-strength filter
+            return none
+        ev = visible(d15["structure"], t)
+        ev = ev[ev["time"] > d_time]
+        shift = ("CHoCH_up", "BOS_up") if want == "long" else ("CHoCH_down", "BOS_down")
+        if ev.empty or not ev["kind"].isin(shift).any():
+            return none
+        pdd = premium_discount(visible(dpd["swings"], t, since=context_window_start(t)), price)
+        if pdd is None or (want == "long" and pdd["zone"] != "discount") \
+                or (want == "short" and pdd["zone"] != "premium"):
+            return none
+        sw = visible(d15["swings"], t, since=context_window_start(t))
+        sw = sw[sw["kind"] == ("low" if want == "long" else "high")]
+        if sw.empty:
+            return none
+        buf = RULE_SL_BUFFER_PIPS * PIP
+        sl = sw.iloc[-1]["level"] - buf if want == "long" else sw.iloc[-1]["level"] + buf
+        risk = (price - sl) if want == "long" else (sl - price)
+        if risk < BRK_MIN_STOP_PIPS * PIP:
+            return none
+        tp = price + rr * risk if want == "long" else price - rr * risk
+        plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
+                         confidence=100, reasoning=f"slipstream rr{rr:g} adx{adx_min:g} {side}")
+        ok, reason = validate_plan(plan, price)
+        if not ok:
+            return {**none, "status": "validator_rejected", "reject_reason": reason}
+        return {"plan": plan, "status": "ok", "cache_hit": False, "attempts": 1,
+                "reject_reason": "", "breakeven_at_r": breakeven_at_r}
+    return decide
+
+
 # --- deterministic mock LLM for the smoke test --------------------------------------
 class MockLLM:
     """Scripted generate_fn. Cycles through: valid long / none / low-confidence long
@@ -2070,7 +2179,26 @@ if DO_REAL:
 # ### Rule-only ICT baseline + buy-and-hold (deterministic, fast)
 
 # %%
-if DO_REAL and os.environ.get("BOT_COMPARE_STRATS"):
+if DO_REAL and os.environ.get("BOT_COMPARE_SLIP"):
+    # SLIPSTREAM improvement variants — each isolates one research-backed lever, plus
+    # one FUSION of the best. Needs BOT_RR_FREE=1 (RR varies). See STRATEGY_COMPARISON_SPEC.
+    _variants = {
+        "rule_ict":     ("SLIPSTREAM",     dict()),                                  # control
+        "slip_adx":     ("SLIP-ADX",       dict(adx_min=22)),                         # skip chop
+        "slip_runner":  ("SLIP-RUNNER",    dict(rr=3.0)),                             # let winners run
+        "slip_be":      ("SLIP-BREAKEVEN", dict(breakeven_at_r=1.0)),                 # free trade at 1R
+        "slip_short":   ("SLIP-SHORT",     dict(side="short")),                       # drop the losing longs
+        "slip_fusion":  ("SLIP-FUSION",    dict(rr=2.0, adx_min=22, side="short", breakeven_at_r=1.0)),
+    }
+    print("SLIPSTREAM variant comparison:")
+    for _key, (_lbl, _kw) in _variants.items():
+        RESULTS[_key] = run_walk_forward(clean_1m, M_TF, M_DET,
+            make_slipstream_variant_fn(M_DET, M_TF, **_kw), _lbl)
+        _r = RESULTS[_key]
+        print(f"  {_lbl:15} trades {len(_r['trades']):>3}  final ${_r['final_equity']:,.0f}")
+    RESULTS["buy_hold"] = buy_and_hold(M_TF, BACKTEST_START, BACKTEST_END)
+    print(f"buy-and-hold final equity: ${RESULTS['buy_hold']['final_equity']:,.0f}")
+elif DO_REAL and os.environ.get("BOT_COMPARE_STRATS"):
     # Three named ICT strategies compared head-to-head (see STRATEGY_COMPARISON_SPEC.md).
     # SLIPSTREAM is keyed "rule_ict" so the existing report wiring works unchanged.
     print("3-strategy ICT comparison — SLIPSTREAM / MIDNIGHT RAID / BLOODHOUND:")

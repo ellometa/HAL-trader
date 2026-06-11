@@ -12,3 +12,6 @@ bot_rule_5yr_nobrk.ipynb
 bot_brk3yr.ipynb
 bot_cmp_test.ipynb
 bot_strat_compare.ipynb
+bot_compare_nobrk.ipynb
+bot_slip_test.ipynb
+bot_slip_compare.ipynb

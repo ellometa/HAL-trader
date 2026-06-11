@@ -58,7 +58,26 @@ if DO_REAL:
 # ### Rule-only ICT baseline + buy-and-hold (deterministic, fast)
 
 # %%
-if DO_REAL and os.environ.get("BOT_COMPARE_STRATS"):
+if DO_REAL and os.environ.get("BOT_COMPARE_SLIP"):
+    # SLIPSTREAM improvement variants — each isolates one research-backed lever, plus
+    # one FUSION of the best. Needs BOT_RR_FREE=1 (RR varies). See STRATEGY_COMPARISON_SPEC.
+    _variants = {
+        "rule_ict":     ("SLIPSTREAM",     dict()),                                  # control
+        "slip_adx":     ("SLIP-ADX",       dict(adx_min=22)),                         # skip chop
+        "slip_runner":  ("SLIP-RUNNER",    dict(rr=3.0)),                             # let winners run
+        "slip_be":      ("SLIP-BREAKEVEN", dict(breakeven_at_r=1.0)),                 # free trade at 1R
+        "slip_short":   ("SLIP-SHORT",     dict(side="short")),                       # drop the losing longs
+        "slip_fusion":  ("SLIP-FUSION",    dict(rr=2.0, adx_min=22, side="short", breakeven_at_r=1.0)),
+    }
+    print("SLIPSTREAM variant comparison:")
+    for _key, (_lbl, _kw) in _variants.items():
+        RESULTS[_key] = run_walk_forward(clean_1m, M_TF, M_DET,
+            make_slipstream_variant_fn(M_DET, M_TF, **_kw), _lbl)
+        _r = RESULTS[_key]
+        print(f"  {_lbl:15} trades {len(_r['trades']):>3}  final ${_r['final_equity']:,.0f}")
+    RESULTS["buy_hold"] = buy_and_hold(M_TF, BACKTEST_START, BACKTEST_END)
+    print(f"buy-and-hold final equity: ${RESULTS['buy_hold']['final_equity']:,.0f}")
+elif DO_REAL and os.environ.get("BOT_COMPARE_STRATS"):
     # Three named ICT strategies compared head-to-head (see STRATEGY_COMPARISON_SPEC.md).
     # SLIPSTREAM is keyed "rule_ict" so the existing report wiring works unchanged.
     print("3-strategy ICT comparison — SLIPSTREAM / MIDNIGHT RAID / BLOODHOUND:")
