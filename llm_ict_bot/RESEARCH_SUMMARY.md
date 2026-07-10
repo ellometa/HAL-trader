@@ -392,6 +392,44 @@ income.
 
 ---
 
+## Test 13 — Harness audit + the bond sleeve (FORTRESS)
+
+**Part A — robustness audit of the Test 9–12 code** (`test_harness_sanity.py`).
+Five executable invariants, 13 checks, all pass: **truncation invariance** (deleting
+the future changes no position — the definitive lookahead test, run per strategy);
+accounting identity (pos=1 at zero cost reproduces close[-1]/close[0] to 1e-9); cost
+monotonicity + hand-checked round-trip drag; bootstrap fidelity (mean/std converge);
+eval-sim limiting behavior (always-up passes 100%, always-down blows 100%, EV=-fee).
+Bootstrap block-size sensitivity on the headline number: pass 82–85%, $421–444/mo
+across blocks 5→42 — the 5-day-block concern does not move the answer. Known
+simplifications that remain: end-of-month uses the month's trading-day count
+(exchange-calendar knowledge, not price lookahead); daily-loss checked close-to-close;
+FundingPips balance-carry approximated as reset.
+
+**Part B — more strategies: the bond sleeve.** Test 12 showed QQQ adds correlation,
+not diversification. The published month-end bond effect (window-dressing flows into
+Treasuries; QS "Seasonal Strategy for Bonds") + IBS on TLT form a bond sleeve
+(TLT 2002–2026, fetched via yfinance). **FORTRESS = 70% SPY portfolio + 30% TLT
+sleeve**:
+
+| profile | CAGR | Sharpe | MaxDD | return/DD |
+|---|---|---|---|---|
+| SPY portfolio | 8.4% | 1.14 | −9.7% | 0.86 |
+| **FORTRESS 70/30** | 7.2% | **1.41** | **−6.6%** | **1.10** |
+
+Eval results (FundingPips, best leverage): **FORTRESS at 2×: 88.8% pass, 9.3 months
+to funded, 39.9% funded death, $544/month** — beats the SPY portfolio's $425/mo on
+every dimension simultaneously. The −6.6% MaxDD buys the leverage room that QQQ's
+volatility could not. TLT sleeve alone is mediocre (~$220/mo) — its value is entirely
+in the combination.
+
+**Caveats.** TLT data starts 2002 (no 1970s-style rate-shock regime in sample; 2022
+*is* in sample and FORTRESS's −6.6% MaxDD includes it). The month-end bond effect has
+mixed independent replications — our own implementation of the conservative window is
+what's tested here. Same correlated-accounts caveat as ever.
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT

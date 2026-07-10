@@ -54,6 +54,22 @@ FIRMS = {
 def tt_on(px: pd.DataFrame) -> dict:                      # TT rules, any instrument
     return spy_turnaround_tuesday(px)
 
+def tlt_month_end(px: pd.DataFrame, n_last: int = 5) -> dict:
+    """Month-end bond effect: long TLT from the close of the n_last-th-last trading
+    day of the month through the month's final close. [QS 'Seasonal Strategy for
+    Bonds (TLT)'; window-dressing/rebalancing flows into Treasuries at month-end]"""
+    ym = px.index.to_period("M")
+    g = pd.Series(np.arange(len(px)), index=px.index).groupby(ym)
+    order, size = g.cumcount(), g.transform("size")
+    pos = ((order >= size - n_last) & (order < size - 1)).astype(float)
+    return run(pd.Series(pos, index=px.index), px, COST["SPY"], fill="close")
+
+def tlt_sleeve(tlt: pd.DataFrame) -> dict:
+    """Bond sleeve: month-end seasonal + IBS mean reversion, equal weight."""
+    legs = pd.DataFrame({"eom": tlt_month_end(tlt)["pos"],
+                         "ibs": ibs_strategy(tlt, "SPY")["pos"]})
+    return run(legs.mean(axis=1), tlt, COST["SPY"], fill="close")
+
 def qqq_portfolio(qqq: pd.DataFrame) -> dict:
     legs = pd.DataFrame({
         "ibs": ibs_strategy(qqq, "QQQ")["pos"],
@@ -75,9 +91,9 @@ def vol_target(net: pd.Series, pos: pd.Series, tv: float = 0.10) -> tuple[pd.Ser
     return net * lever, pos * lever
 
 def eval_sim(net: np.ndarray, pos: np.ndarray, firm: dict, lev: float,
-             n_sims: int = 3000, horizon: int = 1000) -> dict:
+             n_sims: int = 3000, horizon: int = 1000, block: int = 5) -> dict:
     fin = 0.06 / PPY * np.maximum(0.0, lev * pos - 1.0)
-    paths = block_bootstrap(lev * net - fin, horizon, n_sims)
+    paths = block_bootstrap(lev * net - fin, horizon, n_sims, block=block)
     P1, P2, FUNDED, DEAD = 0, 1, 2, 3
     state = np.zeros(n_sims, dtype=int)
     bal = np.full(n_sims, 100_000.0)
@@ -111,17 +127,25 @@ def eval_sim(net: np.ndarray, pos: np.ndarray, firm: dict, lev: float,
 
 def main():
     spy, qqq = load_equity("SPY"), load_equity("QQQ")
+    tlt = load_equity("TLT")
     sp = spy_portfolio(spy, "avg")
     qp = qqq_portfolio(qqq)
+    ts_ = tlt_sleeve(tlt)
     m_net, m_pos = combine(sp, qp)
     v_net, v_pos = vol_target(m_net, m_pos)
     tt = spy_turnaround_tuesday(spy)
+    # FORTRESS: 70% SPY portfolio + 30% TLT bond sleeve (uncorrelated by design)
+    fix = sp["net"].index.intersection(ts_["net"].index)
+    f_net = 0.7 * sp["net"].reindex(fix).fillna(0) + 0.3 * ts_["net"].reindex(fix).fillna(0)
+    f_pos = 0.7 * sp["pos"].reindex(fix).fillna(0) + 0.3 * ts_["pos"].reindex(fix).fillna(0)
     cands = {
         "SPY portfolio":    (sp["net"], sp["pos"]),
         "QQQ portfolio":    (qp["net"], qp["pos"]),
         "MULTI 50/50":      (m_net, m_pos),
         "MULTI vol-target": (v_net, v_pos),
         "SPY TT alone":     (tt["net"], tt["pos"]),
+        "TLT sleeve alone": (ts_["net"], ts_["pos"]),
+        "FORTRESS 70/30":   (f_net, f_pos),
     }
     print("candidate profiles (full history):")
     for name, (net, pos) in cands.items():
