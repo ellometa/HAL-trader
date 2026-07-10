@@ -55,8 +55,11 @@ RISK_PCT         = 0.01           # 1% of current equity risked per trade
 RR_TARGET        = float(os.environ.get("BOT_RR", "2.0"))   # reward:risk (BOT_RR-overridable)
 RR_TOLERANCE     = 0.15           # validator accepts RR in [target-tol, target+tol]
 RR_FREE          = bool(os.environ.get("BOT_RR_FREE"))      # variable-RR (liquidity targets)
-SPREAD_PIPS      = 1.0            # EUR/USD spread, fixed (the only cost modelled)
-PIP              = 0.0001         # EUR/USD pip size
+# Instrument-agnostic since Test 16: BOT_SYMBOL picks the parquet store, BOT_PIP the
+# pip size, BOT_SPREAD the fixed spread in pips. Defaults = the original EUR/USD spec.
+# Gold convention used here: BOT_SYMBOL=xauusd BOT_PIP=0.1 BOT_SPREAD=3 ($0.30 spread).
+SPREAD_PIPS      = float(os.environ.get("BOT_SPREAD", "1.0"))   # spread, in pips
+PIP              = float(os.environ.get("BOT_PIP", "0.0001"))   # pip size
 CONF_THRESHOLD   = 70             # skip trades below this LLM confidence (gate only)
 SESSION          = "new_york"     # entries only during NY session (context: all sessions)
 
@@ -71,7 +74,8 @@ TZ_NY            = ZoneInfo("America/New_York")
 
 # ----------------------------------------------------------------------------- data
 DATA_PATH        = Path("../data")            # existing Parquet store (Snappy, UTC tz-naive)
-PARQUET_1M       = DATA_PATH / "eurusd_1m.parquet"
+BOT_SYMBOL       = os.environ.get("BOT_SYMBOL", "eurusd")
+PARQUET_1M       = DATA_PATH / f"{BOT_SYMBOL}_1m.parquet"
 DECISION_TF      = "15min"                    # the LLM is polled once per closed bar of this TF
 CONTEXT_TFS      = ["5min", "15min", "1h", "4h", "1d"]   # multi-timeframe context
 FX_DAY_OFFSET    = "21h"                      # daily bars anchored 21:00 UTC (~5pm New York)

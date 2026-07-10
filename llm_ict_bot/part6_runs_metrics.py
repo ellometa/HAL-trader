@@ -58,7 +58,28 @@ if DO_REAL:
 # ### Rule-only ICT baseline + buy-and-hold (deterministic, fast)
 
 # %%
-if DO_REAL and os.environ.get("BOT_COMPARE_ICT2"):
+if DO_REAL and os.environ.get("BOT_COMPARE_ICT3"):
+    # ICT tournament 3 — gold edition (Test 16). Same models, new instrument:
+    # XAUUSD is the most ICT-traded market; if the stop-hunt narrative works
+    # anywhere, it should work here. SLIP-ADX rides along as the cross-instrument
+    # check of the thin FX edge. Needs BOT_SYMBOL=xauusd BOT_PIP=0.1 BOT_SPREAD=3
+    # BOT_RR_FREE=1 BOT_SESSION_START=00:00.
+    _contenders = {
+        "rule_ict":    ("TURTLE SOUP",   lambda: make_turtle_soup_decide_fn(M_DET, M_TF)),
+        "judas":       ("MIDNIGHT RAID", lambda: make_judas_decide_fn(M_DET, M_TF)),
+        "mmxm":        ("MMXM-STRICT",   lambda: make_mmxm_decide_fn(M_DET, M_TF)),
+        "mmxm_loose":  ("MMXM-LOOSE",    lambda: make_mmxm_decide_fn(M_DET, M_TF,
+                                             win=16, frac=0.5, run_frac=0.25, use_pd=False)),
+        "slip_adx":    ("SLIP-ADX",      lambda: make_slipstream_variant_fn(M_DET, M_TF, adx_min=22)),
+    }
+    print("ICT tournament 3 (GOLD) — TURTLE SOUP / MIDNIGHT RAID / MMXM×2 / SLIP-ADX:")
+    for _key, (_lbl, _mk) in _contenders.items():
+        RESULTS[_key] = run_walk_forward(clean_1m, M_TF, M_DET, _mk(), _lbl)
+        _r = RESULTS[_key]
+        print(f"  {_lbl:15} trades {len(_r['trades']):>3}  final ${_r['final_equity']:,.0f}")
+    RESULTS["buy_hold"] = buy_and_hold(M_TF, BACKTEST_START, BACKTEST_END)
+    print(f"buy-and-hold final equity: ${RESULTS['buy_hold']['final_equity']:,.0f}")
+elif DO_REAL and os.environ.get("BOT_COMPARE_ICT2"):
     # ICT tournament 2 (see TOURNAMENT2_SPEC.md) — new models researched from ICT/SMC
     # sources vs the incumbent SLIP-ADX (Test 7's only OOS winner, keyed "rule_ict"
     # so existing report wiring works). Needs BOT_RR_FREE=1 and BOT_SESSION_START=02:00.

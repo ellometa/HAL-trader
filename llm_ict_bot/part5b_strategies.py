@@ -425,6 +425,130 @@ def make_po3_decide_fn(det_store: dict, tf_store: dict, htf_bias_tf: str = "1h",
     return decide
 
 
+# --- MMXM — ICT Market Maker Buy/Sell Model ------------------------------------------
+# The four phases (innercircletrader.net MMBM/MMSM guides, writofinance MMSM):
+#   1 Original consolidation — a tight multi-hour range (the "staging area").
+#   2 Engineering liquidity — price runs AWAY from the range (the curve's left side),
+#     taking the stops resting beyond it.
+#   3 Smart Money Reversal — at an HTF PD array (4h discount for the buy model),
+#     confirmed by a same-direction 15m structure shift.
+#   4 Liquidity hunt (right side) — price returns to the original consolidation.
+# Mechanization: consolidation = 32 consecutive 15m bars (8h) whose total range is
+# < 35% of the rolling 20-day average daily range; liquidity run = extreme beyond the
+# range by ≥ 50% of the range height; TP = consolidation midpoint (variable RR).
+MMXM_LO, MMXM_HI = 2 * 60, 12 * 60        # entries 02:00–12:00 ET
+MMXM_WIN, MMXM_MAX_AGE = 32, 5            # 32 bars ≈ 8h; range must be < 5 days old
+
+def _consolidation_lookup(tf_store: dict, win: int = MMXM_WIN, frac: float = 0.35):
+    """f(t) -> (hi, lo, mid, end_time) of the most recent completed consolidation
+    (`win`-bar 15m block, range < `frac` × 20d avg daily range) with end_time <= t."""
+    f15, f1d = tf_store["15min"], tf_store["1d"]
+    hi = pd.Series(f15["high"]).rolling(win).max()
+    lo = pd.Series(f15["low"]).rolling(win).min()
+    adr = (f1d["high"] - f1d["low"]).rolling(20).mean()      # avg daily range
+    adr_ct = f1d["close_time"].to_numpy(dtype="datetime64[ns]")
+    ct15 = f15["close_time"].to_numpy(dtype="datetime64[ns]")
+    j = np.searchsorted(adr_ct, ct15, side="right") - 1      # last completed 1d bar
+    adr15 = np.where(j >= 0, adr.to_numpy()[np.clip(j, 0, None)], np.nan)
+    is_cons = (hi - lo).to_numpy() < frac * adr15
+    is_cons &= ~np.isnan(adr15)
+    # completed blocks: last bar of each contiguous coil run (knowable one bar later)
+    ends = np.flatnonzero(is_cons[:-1] & ~is_cons[1:])
+    h_np, l_np = hi.to_numpy(), lo.to_numpy()
+
+    def f(t, k_max: int = 8):
+        """Up to `k_max` most recent completed consolidation blocks strictly before t,
+        newest first: [(hi, lo, mid, end_time), ...]."""
+        k = np.searchsorted(ct15, np.datetime64(t), side="right") - 1
+        p = np.searchsorted(ends, k - 1, side="right") - 1   # end+1 must be <= k
+        out = []
+        while p >= 0 and len(out) < k_max:
+            i = ends[p]
+            out.append((h_np[i], l_np[i], (h_np[i] + l_np[i]) / 2.0, pd.Timestamp(ct15[i])))
+            p -= 1
+        return out
+    return f
+
+def make_mmxm_decide_fn(det_store: dict, tf_store: dict, htf_bias_tf: str = "1h",
+                        pd_tf: str = "4h", *, win: int = MMXM_WIN, frac: float = 0.35,
+                        run_frac: float = 0.5, use_pd: bool = True) -> Callable:
+    """Strict defaults = the faithful mechanization. MMXM-LOOSE (win=16, frac=0.5,
+    run_frac=0.25, use_pd=False) approximates how loosely practitioners mark the
+    model — the 4-6-setups-a-week reading."""
+    d15, dbias, dpd = det_store["15min"], det_store[htf_bias_tf], det_store[pd_tf]
+    f15 = tf_store["15min"]
+    idx = f15.index.to_numpy(dtype="datetime64[ns]")
+    low, high = f15["low"].to_numpy(), f15["high"].to_numpy()
+    cons = _consolidation_lookup(tf_store, win=win, frac=frac)
+
+    def decide(ctx_provider, price, t):
+        none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+        if not (MMXM_LO <= _et_minute(t) < MMXM_HI):
+            return none
+        blocks = cons(t)
+        if not blocks:
+            return none
+        bias = visible(dbias["structure"], t)
+        if bias.empty:
+            return none
+        want = "long" if bias.iloc[-1]["trend_after"] == 1 else "short"
+        # newest completed consolidation that price has since RUN AWAY from —
+        # recent re-coils must not mask the origin range of the delivery
+        hit = None
+        for c_hi, c_lo, c_mid, c_end in blocks:
+            if t - c_end > pd.Timedelta(days=MMXM_MAX_AGE):
+                break                                        # older blocks only get staler
+            rng = c_hi - c_lo
+            m = (idx > np.datetime64(c_end)) & (idx <= np.datetime64(t))
+            if not m.any():
+                continue
+            if want == "long":                               # sell program (left curve)
+                ext = low[m].min()
+                if ext <= c_lo - run_frac * rng:
+                    hit = (c_hi, c_lo, c_mid, rng, ext,
+                           pd.Timestamp(idx[m][low[m].argmin()]))
+                    break
+            else:
+                ext = high[m].max()
+                if ext >= c_hi + run_frac * rng:
+                    hit = (c_hi, c_lo, c_mid, rng, ext,
+                           pd.Timestamp(idx[m][high[m].argmax()]))
+                    break
+        if hit is None:
+            return none
+        c_hi, c_lo, c_mid, rng, ext, ext_time = hit
+        # Smart Money Reversal: HTF discount/premium + 15m MSS after the extreme
+        if use_pd:
+            pdd = premium_discount(visible(dpd["swings"], t, since=context_window_start(t)), price)
+            if pdd is None or (want == "long" and pdd["zone"] != "discount") \
+                    or (want == "short" and pdd["zone"] != "premium"):
+                return none
+        ev = visible(d15["structure"], t)
+        ev = ev[ev["time"] > ext_time]
+        shift = ("CHoCH_up", "BOS_up") if want == "long" else ("CHoCH_down", "BOS_down")
+        if ev.empty or not ev["kind"].isin(shift).any():
+            return none
+        buf = RULE_SL_BUFFER_PIPS * PIP
+        sl = ext - buf if want == "long" else ext + buf
+        risk = (price - sl) if want == "long" else (sl - price)
+        if risk < RULE_MIN_STOP_PIPS * PIP:
+            return none
+        tp = c_mid                                           # return to the origin
+        reward = (tp - price) if want == "long" else (price - tp)
+        if reward < risk:                                    # < 1R back to the range
+            return none
+        plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
+                         confidence=100,
+                         reasoning="mmxm: consolidation → liquidity run → SMR → return")
+        ok, reason = validate_plan(plan, price)
+        if not ok:
+            return {**none, "status": "validator_rejected", "reject_reason": reason}
+        return {"plan": plan, "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+    return decide
+
+
 # --- SLIPSTREAM improvement variants ------------------------------------------------
 # Diagnosis of base SLIPSTREAM: regime-dependent (all profit in 2023-24 trend years),
 # and the long side loses while shorts win. Research-backed levers (Reddit/SMC/ICT):
