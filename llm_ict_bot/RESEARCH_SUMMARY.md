@@ -498,6 +498,29 @@ select candidates, never as results.
 
 ---
 
+## Test 16-prep — Bot mining: what other trading bots have that we don't
+
+Surveyed four open-source ecosystems while the gold tick download ran
+(`bot_mining.py`): **freqtrade-strategies** (hyperopt-fit TA mashups, backtested on
+20 days of 2018 — the overfitting signature our Tests 2-4 documented; nothing to
+take beyond the protections already ported in Test 10), **jesse examples** (same
+family), **je-suis-tm/quant-trading** (17 strategies, frictionless backtests; one
+transferable), **QuantConnect community library** (academic replications — source
+of the main candidate). Two survivors, both tested on our data:
+
+| candidate | result | verdict |
+|---|---|---|
+| **GEM dual momentum** (Antonacci; SPY/EFA/AGG + BIL filter, monthly) | 10.1%/yr, Sharpe 0.66, −34% MaxDD, 1.9 switches/yr — era-consistent, matches published character incl. the documented 2022 whipsaw drawdown | **Replicates, but does not improve the stack**: +0.44 correlation with FORTRESS (both long-US-beta), and the 50/50 blend (Sharpe 1.08, −17.7% DD) is strictly worse than FORTRESS alone (1.41, −6.6%) |
+| **Dual Thrust** (opening-range breakout, k1=0.5, 4d range) on BTC 15m | 8.9%/yr full, Sharpe 0.65 — but **−11%/yr, Sharpe −1.01 post-2025** | Fails OOS; no take |
+
+**Conclusion.** The open-source bot world divides into (a) overfit TA mashups and
+(b) academic replications — and our Test 9–13 stack already contains the best of
+category (b) for our purposes. The one structural idea worth keeping on the shelf:
+GEM-style absolute-momentum filters as crash protection at multi-year horizons —
+irrelevant inside a −10% eval budget, potentially relevant for personal capital.
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
