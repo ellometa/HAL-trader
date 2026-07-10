@@ -321,6 +321,43 @@ crash.
 
 ---
 
+## Test 11 — FX funded-account simulation: SLIP-ADX vs 2-step evals
+
+**Question.** Buy a $100k FX prop eval and trade it with SLIP-ADX — when does it pass,
+when does it blow? (`fx_funded_sim.py`.) Rules researched per firm: FTMO Swing
+(+10%/+5%, −5% daily / −10% static, min 4 days, $540, 80%), FundingPips (+8%/+5%,
+$399, 80%), FundedNext (+10%/+5%, $549, 90%). Trade stream bootstrapped from the real
+47-trade walk-forward record (median 28 days between trades); three edge scenarios:
+**oos** (the 10 OOS trades, +0.70R — optimistic), **full** (all 47, +0.17R — base),
+**null** (demeaned — skeptic). 5,000 paths × 5 years per cell.
+
+Representative cells (FundingPips, the friendliest rules):
+
+| edge | risk/trade | pass | med. months→funded | blow (5yr) | med. months→blow | EV (5yr) |
+|---|---|---|---|---|---|---|
+| oos | 1% | 99.1% | 24 | 0.1% | — | +$14,990 |
+| oos | 2% | 99.0% | 12 | 6.6% | 38 | +$39,743 |
+| **full** | **2%** | **62.1%** | **23** | **55.3%** | **31** | **+$5,891 (~$105/mo)** |
+| full | 1% | 33.6% | 41 | 5.7% | 41 | +$795 |
+| null | 2% | 31.9% | 25 | 75.4% | 26 | +$1,512 |
+| null | 3% | 32.0% | 15 | 96.6% | 15 | +$2,269 |
+
+**Findings.** (1) **Everything hinges on which edge you believe.** If the 10-trade OOS
+record is real, evals are near-free money (99% pass, EV $15–60k). On the defensible
+full-record base (+0.17R), it's a coin-flip business: ~60% pass in ~2 years, ~55%
+eventually blow, ~$100/month expected. (2) **How it blows:** never the −5% daily line
+(one position at ≤3% risk can't reach it) — always the slow bleed to −10% max-loss,
+median ~2–3 years in. (3) **The null-edge EV is *positive* at high risk** (+$1.5–2.3k)
+— that's the fee-vs-payout optionality of the prop model itself, which firms suppress
+in practice via consistency rules, payout reviews, and denials. Don't bank on it.
+(4) **100% of paths trip a >30-day inactivity gap** — SLIP-ADX's 28-day median trade
+spacing means every firm's inactivity policy gets tested; FTMO allows freezes,
+others may terminate. A ~monthly-trading strategy is structurally awkward for props.
+(5) Comparison: the SPY portfolio route (Test 10) pays ~3× more per account-month at
+a 93% pass rate. FX remains the worse vehicle, exactly as Tests 1–8 kept saying.
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
