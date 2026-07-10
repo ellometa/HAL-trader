@@ -198,6 +198,42 @@ def spy_end_of_month(px: pd.DataFrame) -> dict:
         arr[i] = state
     return run(pd.Series(arr, index=px.index), px, COST["SPY"], fill="close")
 
+def ibs_strategy(px: pd.DataFrame, sym: str) -> dict:
+    """IBS = (close-low)/(high-low); buy close when IBS<0.2, sell when IBS>0.8.
+    [QuantifiedStrategies IBS backtests: SPY 0.8%/trade 78% win; QQQ 1.33%/trade 75%]"""
+    rng = (px["high"] - px["low"])
+    ibs = ((px["close"] - px["low"]) / rng.where(rng > 0)).fillna(0.5)
+    pos = pd.Series(np.nan, index=px.index)
+    pos[ibs < 0.2] = 1.0
+    pos[ibs > 0.8] = 0.0
+    return run(pos.ffill().fillna(0.0), px, COST[sym], fill="close")
+
+def double7(px: pd.DataFrame, sym: str) -> dict:
+    """Connors Double 7s: close > 200d MA and close = 7-day low close → buy close;
+    sell close at a 7-day high close. [Connors & Alvarez book; QS: 82.5% win, PF 2.58]"""
+    c, ma200 = px["close"], px["close"].rolling(200).mean()
+    lo7, hi7 = c.rolling(7).min(), c.rolling(7).max()
+    pos = pd.Series(np.nan, index=px.index)
+    pos[(c > ma200) & (c <= lo7)] = 1.0
+    pos[c >= hi7] = 0.0
+    return run(pos.ffill().fillna(0.0), px, COST[sym], fill="close")
+
+# --- SPY portfolio: the answer to "6 trades a year" ------------------------------------
+SPY_LEGS = {
+    "rsi2_200ma": spy_rsi2_200ma,
+    "tt": spy_turnaround_tuesday,
+    "eom": spy_end_of_month,
+    "ibs": lambda px: ibs_strategy(px, "SPY"),
+    "d7": lambda px: double7(px, "SPY"),
+}
+
+def spy_portfolio(px: pd.DataFrame, mode: str = "avg") -> dict:
+    """Combine the five SPY legs. mode='avg': position = fraction of legs long
+    (diversified, ≤100%); mode='union': fully long whenever any leg is long."""
+    legs = pd.DataFrame({k: f(px)["pos"] for k, f in SPY_LEGS.items()})
+    pos = legs.mean(axis=1) if mode == "avg" else (legs.max(axis=1) > 0).astype(float)
+    return run(pos, px, COST["SPY"], fill="close")
+
 def buy_hold(px: pd.DataFrame, sym: str) -> dict:
     return run(pd.Series(1.0, index=px.index), px, COST[sym], fill="close")
 
@@ -224,7 +260,12 @@ def main():
         metrics(spy_turnaround_tuesday(spy), "SPY Turnaround Tuesday", ppy_d),
         metrics(spy_end_of_month(spy), "SPY End-of-month", ppy_d),
         metrics(buy_hold(spy, "SPY"), "SPY buy & hold", ppy_d),
+        metrics(ibs_strategy(spy, "SPY"), "SPY IBS <0.2/>0.8", ppy_d),
+        metrics(double7(spy, "SPY"), "SPY Double 7s (Connors book)", ppy_d),
+        metrics(spy_portfolio(spy, "avg"), "SPY PORTFOLIO avg (5 legs)", ppy_d),
+        metrics(spy_portfolio(spy, "union"), "SPY PORTFOLIO union (5 legs)", ppy_d),
         metrics(rsi2_plain(qqq, "QQQ"), "QQQ RSI-2 (robustness x-check)", ppy_d),
+        metrics(ibs_strategy(qqq, "QQQ"), "QQQ IBS <0.2/>0.8", ppy_d),
         metrics(buy_hold(qqq, "QQQ"), "QQQ buy & hold", ppy_d),
     ]
     rows.sort(key=lambda r: -(r["oos"].get("sharpe") if r["oos"].get("sharpe") == r["oos"].get("sharpe") else -9))

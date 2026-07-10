@@ -279,6 +279,48 @@ replicated — we don't guess at rules and call it replication.
 
 ---
 
+## Test 10 — Portfolio, stress battery, and the funded-account answer
+
+**Question.** Stack the Test 9 survivors into one SPY portfolio (RSI-2+200MA,
+Turnaround Tuesday, End-of-month, IBS, Double 7s — all published rules, zero tuning),
+stress it four ways, and Monte-Carlo an FTMO Swing $100k challenge with it
+(`stress_funded.py`, report `stress_funded_*.html`).
+
+**The portfolio.** PORTFOLIO avg: **CAGR 8.4%, Sharpe 1.14, MaxDD −10%** over 33 years —
+top Sharpe of everything tested in this project; **Sharpe 1.61 post-2025**. Union
+variant: 13.5%/yr (beats buy-and-hold's 10.9%) at −30% DD vs −55%. Frequency: 89
+signal-changes/yr (avg) / 23 round-trips/yr (union), ~70% exposure — the "6 trades a
+year" problem is solved by stacking non-overlapping anomalies, not by trading faster.
+
+**Stress battery.** S1 *plateau:* all 17 parameter neighbors profitable (worst Sharpe
+0.59, most ≥0.75) — edge is a plateau, not a spike. S2 *bootstrap* (2,000×2yr paths):
+median CAGR +8.4%, P(2yr loss) 4.1%, MaxDD 95th-pct −11.2%. S3 *decades:* Sharpe
+0.88–1.42 in every era 1993–2026, DD never worse than −10%. S4 *costs:* survives 10
+bps/side (Sharpe 0.79).
+
+**FTMO Swing $100k Monte Carlo** (fee $540, +10%/+5% targets, −5% daily / −10% total
+static, 80% split, 3,000 paths × 4yr):
+
+| leverage | pass rate | med. days→funded | funded acct dies | EV net of fee | ≈$/month |
+|---|---|---|---|---|---|
+| 1x | 92.7% | 393 (~19 mo) | 8.4% | **+$13,688** | $299 |
+| 2x | 64.2% | 159 (~8 mo) | 86.4% | +$13,838 | $302 |
+| 3x | 52.8% | 93 | 99.3% | +$9,110 | $203 |
+| 5x | 34.4% | 41 | 100% | +$2,896 | $72 |
+
+**Findings.** (1) The challenge is passable with high probability — but slowly: at
+safe leverage the median path takes ~1.5 years to get funded. (2) Leverage buys speed
+and pays for it with near-certain account death (the −5% daily line is unsurvivable at
+3x+ given SPY's tail days). (3) EV is positive at every leverage — the fee is cheap
+relative to payouts — and maximized around 1–2x at **≈$300/month expected per $100k
+account**. (4) Honest caveats: daily-loss breaches checked close-to-close only
+(intraday spikes → real bust risk is higher); bootstrap assumes the 33-year return
+distribution persists; one strategy family (long-only US equity mean reversion) —
+correlated across any number of accounts, so N accounts ≠ N independent incomes in a
+crash.
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
