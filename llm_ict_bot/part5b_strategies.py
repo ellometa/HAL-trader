@@ -282,11 +282,159 @@ def make_breakout_liq_decide_fn(det_store: dict, tf_store: dict, htf_bias_tf: st
     return decide
 
 
+# --- TURTLE SOUP — ICT stop-hunt fade of the previous-day high/low -------------------
+# Sweep-and-reclaim in one 15m bar: price pierces PDH/PDL (runs the stops) but closes
+# back inside the prior day's range → fade toward the previous-day equilibrium
+# ((PDH+PDL)/2). Variable RR (needs BOT_RR_FREE); one attempt per level per ET day.
+TSOUP_LO, TSOUP_HI = 2 * 60, 11 * 60     # 02:00–11:00 ET (London + NY-AM killzones)
+
+def make_turtle_soup_decide_fn(det_store: dict, tf_store: dict) -> Callable:
+    f15 = tf_store["15min"]
+    ct = f15["close_time"].to_numpy(dtype="datetime64[ns]")
+    hi15, lo15, cl15 = (f15[k].to_numpy() for k in ("high", "low", "close"))
+    pdhl = _prev_day_hilo_lookup(tf_store)
+    fired: set = set()                                       # (ET date, side)
+
+    def decide(ctx_provider, price, t):
+        none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+        if not (TSOUP_LO <= _et_minute(t) < TSOUP_HI):
+            return none
+        i = int(np.searchsorted(ct, np.datetime64(t), side="right")) - 1
+        if i < 0 or ct[i] != np.datetime64(t):               # need the bar closing at t
+            return none
+        ref = pdhl(t)
+        if ref is None:
+            return none
+        pdh, pdl = ref
+        eq = (pdh + pdl) / 2.0                               # prev-day equilibrium
+        if hi15[i] > pdh and cl15[i] < pdh:                  # buy-side raid failed
+            want, sweep_ext = "short", hi15[i]
+        elif lo15[i] < pdl and cl15[i] > pdl:                # sell-side raid failed
+            want, sweep_ext = "long", lo15[i]
+        else:
+            return none
+        day = pd.Timestamp(t).tz_localize("UTC").tz_convert(TZ_NY).date()
+        if (day, want) in fired:                             # one attempt per level/day
+            return none
+        buf = RULE_SL_BUFFER_PIPS * PIP
+        sl = sweep_ext + buf if want == "short" else sweep_ext - buf
+        risk = (sl - price) if want == "short" else (price - sl)
+        if risk < RULE_MIN_STOP_PIPS * PIP:
+            return none
+        tp = eq
+        reward = (price - tp) if want == "short" else (tp - price)
+        if reward < risk:                                    # < 1R to equilibrium
+            return none
+        plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
+                         confidence=100,
+                         reasoning="turtle soup: PDH/PDL sweep failed → fade to prev-day eq")
+        ok, reason = validate_plan(plan, price)
+        if not ok:
+            return {**none, "status": "validator_rejected", "reject_reason": reason}
+        fired.add((day, want))
+        return {"plan": plan, "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+    return decide
+
+
+# --- TRIPWIRE — ICT Power of Three (Asia accumulation → London trap → delivery) ------
+# Asia range (19:00 prev ET evening → 02:00 ET) is the accumulation. London's raid of
+# the range side *against* the 1h bias is the manipulation. A same-as-bias 15m MSS
+# after the raid confirms distribution → enter with bias, stop beyond the raid wick.
+PO3_LO, PO3_HI = 2 * 60, 11 * 60          # entries 02:00–11:00 ET
+ASIA_START_MIN = 19 * 60                  # 19:00 ET → bar belongs to next ET day's range
+ASIA_END_MIN = 2 * 60                     # ...through the bar closing at 02:00 ET
+
+def _asia_range_lookup(tf_store: dict):
+    """f(t) -> (hi, lo) of the current ET day's Asia range. Bars from 19:00 the prior
+    ET evening through 01:45 (closing 02:00) — all complete by the 02:00 entry gate."""
+    f15 = tf_store["15min"]
+    et = f15.index.tz_localize("UTC").tz_convert(TZ_NY)
+    hm = np.asarray(et.hour * 60 + et.minute)
+    in_asia = (hm >= ASIA_START_MIN) | (hm < ASIA_END_MIN)
+    day = pd.Series(et.normalize().tz_localize(None))
+    day.loc[hm >= ASIA_START_MIN] += pd.Timedelta(days=1)    # evening bars → next day
+    g = pd.DataFrame({"day": day[in_asia].dt.date.to_numpy(),
+                      "hi": f15["high"].to_numpy()[in_asia],
+                      "lo": f15["low"].to_numpy()[in_asia]}).groupby("day")
+    m = {d: (h, l) for d, h, l in zip(g.groups, g["hi"].max(), g["lo"].min())}
+    def f(t):
+        return m.get(pd.Timestamp(t).tz_localize("UTC").tz_convert(TZ_NY).date())
+    return f
+
+def make_po3_decide_fn(det_store: dict, tf_store: dict, htf_bias_tf: str = "1h",
+                       rr: float = 1.5) -> Callable:
+    d15, dbias = det_store["15min"], det_store[htf_bias_tf]
+    f15 = tf_store["15min"]
+    idx = f15.index.to_numpy(dtype="datetime64[ns]")
+    low, high = f15["low"].to_numpy(), f15["high"].to_numpy()
+    asia = _asia_range_lookup(tf_store)
+
+    def decide(ctx_provider, price, t):
+        none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+        if not (PO3_LO <= _et_minute(t) < PO3_HI):
+            return none
+        rng = asia(t)
+        if rng is None:
+            return none
+        asia_hi, asia_lo = rng
+        bias = visible(dbias["structure"], t)
+        if bias.empty:
+            return none
+        trend = bias.iloc[-1]["trend_after"]
+        want = "long" if trend == 1 else "short"
+        # bars since 02:00 ET today — the London manipulation window so far
+        t_et = pd.Timestamp(t).tz_localize("UTC").tz_convert(TZ_NY)
+        day02 = np.datetime64((t_et.normalize() + pd.Timedelta(hours=2))
+                              .tz_convert("UTC").tz_localize(None))
+        m = (idx >= day02) & (idx <= np.datetime64(t))
+        if not m.any():
+            return none
+        if want == "long":                                   # raid below Asia low?
+            ext = low[m].min()
+            if ext >= asia_lo:
+                return none
+            ext_time = pd.Timestamp(idx[m][low[m].argmin()])
+        else:                                                # raid above Asia high?
+            ext = high[m].max()
+            if ext <= asia_hi:
+                return none
+            ext_time = pd.Timestamp(idx[m][high[m].argmax()])
+        # distribution confirmed: same-as-bias 15m structure shift after the raid
+        ev = visible(d15["structure"], t)
+        ev = ev[ev["time"] > ext_time]
+        shift = ("CHoCH_up", "BOS_up") if want == "long" else ("CHoCH_down", "BOS_down")
+        if ev.empty or not ev["kind"].isin(shift).any():
+            return none
+        buf = RULE_SL_BUFFER_PIPS * PIP
+        sl = ext - buf if want == "long" else ext + buf
+        risk = (price - sl) if want == "long" else (sl - price)
+        if risk < RULE_MIN_STOP_PIPS * PIP:
+            return none
+        tp = price + rr * risk if want == "long" else price - rr * risk
+        plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
+                         confidence=100,
+                         reasoning="po3: asia raid against bias → MSS → distribution")
+        ok, reason = validate_plan(plan, price)
+        if not ok:
+            return {**none, "status": "validator_rejected", "reject_reason": reason}
+        return {"plan": plan, "status": "ok", "cache_hit": False,
+                "attempts": 1, "reject_reason": ""}
+    return decide
+
+
 # --- SLIPSTREAM improvement variants ------------------------------------------------
 # Diagnosis of base SLIPSTREAM: regime-dependent (all profit in 2023-24 trend years),
 # and the long side loses while shorts win. Research-backed levers (Reddit/SMC/ICT):
 # ADX trend-strength filter (skip chop), let winners run (higher RR), break-even stop
 # (free trade), directional selectivity. Each variant isolates one lever.
+# ICT macro windows (ET, half-open): the 20-min slots where "the algorithm delivers".
+ICT_MACROS_ET = ((8 * 60 + 50, 9 * 60 + 10), (9 * 60 + 50, 10 * 60 + 10),
+                 (10 * 60 + 50, 11 * 60 + 10), (11 * 60 + 50, 12 * 60 + 10),
+                 (13 * 60 + 10, 13 * 60 + 30), (14 * 60 + 10, 14 * 60 + 30),
+                 (15 * 60 + 15, 15 * 60 + 45))
 
 def _adx_lookup(tf_store: dict, tf: str = "1h", period: int = 14):
     """Point-in-time Wilder ADX on `tf`: f(t) -> latest ADX with close_time <= t."""
@@ -327,15 +475,18 @@ def _adx_lookup(tf_store: dict, tf: str = "1h", period: int = 14):
 def make_slipstream_variant_fn(det_store: dict, tf_store: dict, *, rr: float = 1.5,
                                adx_min: float = 0.0, adx_tf: str = "1h", side: str = "both",
                                breakeven_at_r=None, htf_bias_tf: str = "1h",
-                               pd_tf: str = "4h") -> Callable:
+                               pd_tf: str = "4h", macro_windows: bool = False) -> Callable:
     d15, dbias, dpd = det_store["15min"], det_store[htf_bias_tf], det_store[pd_tf]
     adx_f = _adx_lookup(tf_store, adx_tf) if adx_min > 0 else None
 
     def decide(ctx_provider, price, t):
         none = {"plan": TradePlan("none"), "status": "ok", "cache_hit": False,
                 "attempts": 1, "reject_reason": ""}
-        if not (7 * 60 <= _et_minute(t) < 16 * 60):
+        m = _et_minute(t)
+        if not (7 * 60 <= m < 16 * 60):
             return none
+        if macro_windows and not any(a <= m < b for a, b in ICT_MACROS_ET):
+            return none                                      # outside ICT macro slots
         disp = visible(d15["displacement"], t, since=t - BRK_SIGNAL_WINDOW)
         if disp.empty:
             return none
@@ -371,7 +522,8 @@ def make_slipstream_variant_fn(det_store: dict, tf_store: dict, *, rr: float = 1
             return none
         tp = price + rr * risk if want == "long" else price - rr * risk
         plan = TradePlan(want, entry=price, stop_loss=sl, take_profit=tp,
-                         confidence=100, reasoning=f"slipstream rr{rr:g} adx{adx_min:g} {side}")
+                         confidence=100, reasoning=f"slipstream rr{rr:g} adx{adx_min:g} {side}"
+                                                   + (" macro" if macro_windows else ""))
         ok, reason = validate_plan(plan, price)
         if not ok:
             return {**none, "status": "validator_rejected", "reject_reason": reason}

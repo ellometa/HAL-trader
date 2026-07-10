@@ -211,6 +211,41 @@ more data / a rolling walk-forward before any trust.
 
 ---
 
+## Test 8 — ICT Tournament 2: Turtle Soup, Power of Three, macro windows
+
+**Question.** Do the remaining big ICT folk models — the stop-hunt fade (Turtle Soup),
+Power of Three (Asia-range manipulation), and macro time-windows — beat the incumbent
+SLIP-ADX? (Spec: `TOURNAMENT2_SPEC.md`; run: 2021-06 → 2026-06, no breakers,
+`BOT_COMPARE_ICT2=1`, session 02:00–16:00 ET.)
+
+| Strategy | Trades | Final equity | In-sample avg R | OOS avg R (2025+) |
+|---|---|---|---|---|
+| SLIP-ADX (control) | 47 | **$108,073** | +0.03R (37 tr) | **+0.70R (10 tr)** |
+| TURTLE SOUP (PDH/PDL sweep fade → prev-day eq) | 723 | $47,362 | −0.08R (536 tr) | −0.10R (187 tr) |
+| TRIPWIRE (PO3: Asia raid → MSS with 1h bias) | 480 | $88,593 | −0.01R (358 tr) | −0.04R (122 tr) |
+| SLIP-MACRO (SLIPSTREAM ∩ ICT macro windows) | 33 | $98,765 | −0.09R (22 tr) | +0.09R (11 tr) |
+| SLIP-ADX-MACRO | 18 | $102,166 | −0.19R (13 tr) | +0.95R (5 tr) |
+| buy-and-hold EUR/USD | — | $94,725 | — | — |
+
+**Findings.** (1) **Turtle Soup is decisively negative** — and unlike everything else in
+this project, the verdict rests on 723 trades with *consistent* IS and OOS behavior
+(26–27% win both halves). Median stop is only 9 pips, so the 1-pip spread alone costs
+~0.11R/trade: the gross pattern is a coin flip (≈+0.02R gross) and costs turn it into a
+fee machine. The "failed sweep reverses" claim has **zero predictive content** here.
+(2) **Power of Three is flat-negative on 480 trades** (≈0R gross, minus costs) — same
+verdict, robustly measured. (3) **Macro windows subtract value**: gating SLIPSTREAM to
+the "algorithm delivery" slots deleted trades without improving them (SLIP-MACRO worse
+than SLIPSTREAM; SLIP-ADX-MACRO worse than SLIP-ADX on totals; its +0.95R OOS is 5
+trades — noise). (4) SLIP-ADX stays champion.
+
+**The meta-result is the sample-size asymmetry.** The models that trade often enough to
+measure properly (723 and 480 trades) show **no gross edge whatsoever** — the honest,
+high-confidence readout of mechanized ICT on EUR/USD 15m. The only "winner" is the one
+that trades so rarely (10 OOS trades) that its record could still be luck. Nothing in
+this tournament produced a reason to believe the next rare-trade winner either.
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT

@@ -58,7 +58,25 @@ if DO_REAL:
 # ### Rule-only ICT baseline + buy-and-hold (deterministic, fast)
 
 # %%
-if DO_REAL and os.environ.get("BOT_COMPARE_SLIP"):
+if DO_REAL and os.environ.get("BOT_COMPARE_ICT2"):
+    # ICT tournament 2 (see TOURNAMENT2_SPEC.md) — new models researched from ICT/SMC
+    # sources vs the incumbent SLIP-ADX (Test 7's only OOS winner, keyed "rule_ict"
+    # so existing report wiring works). Needs BOT_RR_FREE=1 and BOT_SESSION_START=02:00.
+    _contenders = {
+        "rule_ict":       ("SLIP-ADX",       lambda: make_slipstream_variant_fn(M_DET, M_TF, adx_min=22)),
+        "turtle_soup":    ("TURTLE SOUP",    lambda: make_turtle_soup_decide_fn(M_DET, M_TF)),
+        "tripwire":       ("TRIPWIRE",       lambda: make_po3_decide_fn(M_DET, M_TF)),
+        "slip_macro":     ("SLIP-MACRO",     lambda: make_slipstream_variant_fn(M_DET, M_TF, macro_windows=True)),
+        "slip_adx_macro": ("SLIP-ADX-MACRO", lambda: make_slipstream_variant_fn(M_DET, M_TF, adx_min=22, macro_windows=True)),
+    }
+    print("ICT tournament 2 — TURTLE SOUP / TRIPWIRE / SLIP-MACRO / SLIP-ADX-MACRO vs SLIP-ADX:")
+    for _key, (_lbl, _mk) in _contenders.items():
+        RESULTS[_key] = run_walk_forward(clean_1m, M_TF, M_DET, _mk(), _lbl)
+        _r = RESULTS[_key]
+        print(f"  {_lbl:15} trades {len(_r['trades']):>3}  final ${_r['final_equity']:,.0f}")
+    RESULTS["buy_hold"] = buy_and_hold(M_TF, BACKTEST_START, BACKTEST_END)
+    print(f"buy-and-hold final equity: ${RESULTS['buy_hold']['final_equity']:,.0f}")
+elif DO_REAL and os.environ.get("BOT_COMPARE_SLIP"):
     # SLIPSTREAM improvement variants — each isolates one research-backed lever, plus
     # one FUSION of the best. Needs BOT_RR_FREE=1 (RR varies). See STRATEGY_COMPARISON_SPEC.
     _variants = {
