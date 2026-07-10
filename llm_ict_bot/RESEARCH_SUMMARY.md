@@ -470,6 +470,34 @@ and 94.9% pass even under the conservative bound** (truth lies between the colum
 
 ---
 
+## Test 15 — The strategy family vs actual EUR/USD tick data
+
+**Question.** Do the FORTRESS legs work on forex? Run on the repo's own tick-derived
+EUR/USD daily bars (4.3 GB of bid/ask ticks, 2013–2026; chain verified: 1m-rebuilt
+daily bars match stored daily bars with 0.0 deviation on H/L/C).
+
+| leg | 2013–26 CAGR / Sharpe | 2021–26 CAGR / Sharpe |
+|---|---|---|
+| RSI-2 plain | −0.3% / −0.05 | −0.4% / −0.06 |
+| RSI-2 + 200MA | −0.5% / −0.24 | −1.0% / −0.46 |
+| Turnaround Tuesday | −0.0% / 0.02 | +1.1% / 0.29 |
+| End-of-month | −0.9% / −0.19 | −1.3% / −0.27 |
+| IBS | +0.6% / 0.14 | +1.0% / 0.23 |
+| Double 7s | +0.9% / 0.27 | +0.2% / 0.08 |
+| **PORTFOLIO avg** | **+0.1% / 0.04** | **+0.1% / 0.03** |
+| buy & hold EUR/USD | −1.0% / −0.09 | −1.1% / −0.11 |
+
+**Finding.** The anomaly family is **dead on EUR/USD** — every leg within noise of
+zero, portfolio Sharpe 0.04. Perfectly consistent with Test 14 (the edge is an
+equity-microstructure regime: month-end fund flows, index-arb mean reversion) and
+with Tests 1–8 (FX yields nothing). FORTRESS's numbers do NOT transfer to forex;
+a funded account trading it must trade US500/US100-style index instruments, not
+currency pairs. Method note: every number in Tests 9–15 is computed by our own
+audited engine on locally-held price data — published stats were used only to
+select candidates, never as results.
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
