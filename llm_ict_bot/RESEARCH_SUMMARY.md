@@ -430,6 +430,46 @@ what's tested here. Same correlated-accounts caveat as ever.
 
 ---
 
+## Test 14 — More data: 64-year validation + intraday-aware limits
+
+**A · ^GSPC 1962–2026 (16,238 days).** The five legs re-run on the S&P index itself,
+split at 1993 (`more_data_check.py`):
+
+| leg | 1962–92 CAGR / Sharpe | 1993–2026 CAGR / Sharpe |
+|---|---|---|
+| RSI-2 + 200MA | −0.0% / 0.01 | +4.3% / 0.71 |
+| Turnaround Tuesday | −2.0% / −0.22 | +7.9% / 0.81 |
+| IBS | −1.6% / −0.10 | +8.6% / 0.71 |
+| Double 7s | −0.8% / −0.05 | +7.0% / 0.76 |
+| **End-of-month** | **+6.7% / 0.85** | **+6.4% / 0.65** |
+| PORTFOLIO avg | +0.6% / 0.14 | +7.1% / 1.01 |
+
+**The short-term mean-reversion family did not exist before ~1990.** Only the
+end-of-month flow effect is era-invariant (64 straight years). The mean-reversion
+edge is a *regime* — born with index arbitrage/program trading in the late 80s,
+stable for ~35 years including post-publication — not a law of nature. (Softener:
+the index carries no dividends; pre-1993 yields of 3–5% would add roughly +1–2%/yr
+at these exposures — the era gap narrows but does not close.) A regime that
+switched on can switch off; the portfolio's edge should be presumed mortal and
+monitored, not trusted indefinitely.
+
+**B · Intraday-aware eval limits.** Daily lows bound the worst intraday mark
+(conservative: full position at every instrument's simultaneous low). Reshuffles the
+leaderboard (FundingPips):
+
+| candidate | close-only | intraday-aware |
+|---|---|---|
+| FORTRESS 2.0× | 88.8% pass, $544/mo | 78.0% pass, 66% death, $416/mo |
+| **FORTRESS 1.5×** | ~95% pass | **94.9% pass, 12.4 mo, 15.4% death, $486/mo** |
+| FORTRESS 1.0× | 97%+ | 97.5% pass, 1.0% death, $278/mo |
+| SPY portfolio 1.5× | 82.2%, $425/mo | 71.0% pass, 68.5% death, $334/mo |
+
+**2× leverage was an artifact of ignoring intraday marks** — the −5% daily line gets
+touched intra-day on tail days. **FORTRESS at 1.5× is the robust optimum: ~$486/month
+and 94.9% pass even under the conservative bound** (truth lies between the columns).
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
