@@ -246,6 +246,39 @@ this tournament produced a reason to believe the next rare-trade winner either.
 
 ---
 
+## Test 9 — Evidence-backed pivot: replicate published strategies verbatim
+
+**Question.** Leaving ICT and EUR/USD behind: do the strategies with *published, audited*
+backtests (QuantifiedStrategies, Connors, Grayscale, Quantpedia) replicate on our own
+independently fetched data, with our own code and honest costs? Zero tuning by us —
+rules verbatim (`pivot_screen.py`). Sub-period 2025-01+ post-dates the publications
+(closest thing to OOS a replication has).
+
+| Strategy | Full period (net) | 2025+ | Published | Verdict |
+|---|---|---|---|---|
+| SPY Turnaround Tuesday | 9.2%/yr, Shp 0.93, −15% DD, 631 tr | **14.9%/yr, Shp 1.33** | 7.9%/yr, 75% win | **replicates** |
+| SPY RSI-2 + 200MA (Connors) | 5.1%/yr, Shp 0.81, 11% expo | 6.8%/yr, Shp 1.19 | book rules | **replicates** |
+| SPY RSI-2 plain | 8.7%/yr, −34% DD, 28% expo | 10.7%/yr | 9%/yr, −34% DD, 28% expo | **near-exact** |
+| SPY End-of-month | 6.8%/yr | 7.3%/yr | 6.4%/yr | replicates |
+| BTC 20/100 MA (Grayscale) | 38.9%/yr, Shp 0.99 (HODL 0.85) | −9.7%/yr (BTC −26%) | Shp 1.7 vs 1.3 | direction only |
+| BTC D1H1 MACD (Quantpedia) | **−20.3%/yr**, PF 0.84, 948 tr | −23%/yr | +10.8%/yr, Shp 1.07 | **fails (cost churn)** |
+| SPY buy & hold | 10.9%/yr, Shp 0.65, −55% DD | 19.8%/yr | — | benchmark |
+
+**Findings.** (1) **The equity anomalies are real and replicate** — RSI-2 landed within
+0.3 points of the published CAGR with identical exposure and drawdown; Turnaround
+Tuesday *improved* after publication. 340–631 trades over 33 years, near-zero
+parameters. (2) **None beat buy-and-hold on raw CAGR; all beat it on risk** — TT earns
+~85% of buy-hold's return in 22% of the time with a quarter of the drawdown. Real edges
+are risk-shaped, not return-shaped. (3) **The harness caught a fake:** the BTC hourly
+MACD claim dies under 10 bps/side (948 trades of churn). (4) Daily bars + liquid
+equities is where published edges live; intraday FX (Tests 1–8) is where they don't.
+
+Data: SPY 1993–2026 / QQQ 1999–2026 (yfinance, dividend-adjusted, 1 bp/side);
+BTCUSDT 2020–2026 (10 bps/side). The paywalled QQQ day-of-week strategy was not
+replicated — we don't guess at rules and call it replication.
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
