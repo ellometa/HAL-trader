@@ -358,6 +358,40 @@ a 93% pass rate. FX remains the worse vehicle, exactly as Tests 1–8 kept sayin
 
 ---
 
+## Test 12 — The eval lab: strategies engineered explicitly to pass funded evals
+
+**Question.** Optimize for the eval objective itself — hit +8-10% before −10%, fast,
+then survive — rather than Sharpe (`eval_lab.py`). Candidates re-engineered from the
+Test 9 replicated legs: SPY portfolio (baseline), QQQ portfolio (speed via vol),
+MULTI 50/50 (drawdown room via diversification), MULTI + 10% vol-targeting (tail
+suppression), TT alone (speed benchmark). Excluded on published evidence: XAUUSD mean
+reversion (negative, 8,693-trade study) and martingale/grid "pass-service" EAs
+(banned + blow by design). 3,000 paths × 4yr, leverage swept 1–4×.
+
+Best leverage per candidate (FundingPips +8%/+5%, $399):
+
+| candidate | lev | pass | med months→funded | funded death | EV (4yr) | $/month |
+|---|---|---|---|---|---|---|
+| **SPY portfolio** | **1.5×** | **82.2%** | **9.8** | 49.9% | **+$19,817** | **$425** |
+| MULTI 50/50 | 1.0× | 82.2% | 12.8 | **37.6%** | +$15,002 | $323 |
+| MULTI vol-target | 1.0× | 74.0% | 10.0 | 64.6% | +$13,419 | $290 |
+| SPY TT alone | 1.0× | 77.2% | 13.3 | 48.2% | +$13,410 | $290 |
+| QQQ portfolio | 1.0× | 62.7% | 8.6 | 84.1% | +$10,293 | $225 |
+
+**Findings.** (1) **The eval game is won by drawdown room, not speed.** QQQ's extra
+volatility bought only ~1 month faster funding but doubled funded-account mortality
+(84% vs 50%) — its −34% historical MaxDD (dot-com era) is fatal inside a −10% budget.
+(2) **The winner is still the SPY portfolio, just at 1.5× leverage: $425/month
+expected, 82% pass, funded in ~10 months median** — +42% income over Test 10's 1×
+number; the 1.5× sweet spot sits between Test 10's integer scan points. (3) **Vol
+targeting failed here** — honest negative: it levers up calm regimes right before vol
+spikes, and de-levering high-vol periods cuts exactly the days mean reversion earns
+its keep. (4) Firm choice is second-order (FundingPips ≈ FTMO ± ~5%). (5) MULTI 50/50
+is the conservative pick — highest funded survival (62% alive at 4yr) for ~25% less
+income.
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
