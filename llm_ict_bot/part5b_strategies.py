@@ -666,7 +666,8 @@ class MockLLM:
     def __call__(self, prompt: str) -> str:
         m = re.search(r"CURRENT PRICE : (\d+\.\d+)", prompt)
         p = float(m.group(1)) if m else 1.1000
-        rk = 0.0010                       # stop distance
+        rk = 0.0010                       # stop distance — sized to the SYNTHETIC smoke
+                                          # data (always ~1.10 FX-scale), NOT to BOT_PIP
         tgt = round(RR_TARGET * rk, 5)    # on-target TP distance (tracks BOT_RR override)
         bad = round((RR_TARGET + 1.0) * rk, 5)   # off-target distance → must fail validator
         i = self.calls % 6

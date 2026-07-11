@@ -367,15 +367,19 @@ def validate_plan(plan: TradePlan, price: float) -> tuple[bool, str]:
                        f"price {price:.5f} (max {MAX_ENTRY_DRIFT_PIPS:.0f})")
     return True, "ok"
 
-# quick self-checks (valid under both fixed-RR and BOT_RR_FREE modes)
-_risk = 0.0010
-_on_tgt = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + RR_TARGET * _risk, 80)
-_lowrr = TradePlan("long", 1.1000, 1.1000 - _risk, 1.1000 + 0.5 * _risk, 80)   # 0.5R: fails both modes
-assert validate_plan(_on_tgt, 1.1001)[0]
-assert not validate_plan(_lowrr, 1.1001)[0]                                          # bad R:R
-assert not validate_plan(TradePlan("short", 1.1000, 1.0990, 1.1020, 80), 1.1001)[0]  # sides wrong
-assert not validate_plan(_on_tgt, 1.1050)[0]                                         # entry drift
-assert validate_plan(TradePlan("none"), 1.1)[0]
+# quick self-checks (valid under both fixed-RR and BOT_RR_FREE modes; distances are
+# expressed in pips so the checks hold for any BOT_PIP instrument scale)
+_p0 = 1.1000
+_risk = 10 * PIP                                             # 10-pip stop
+_near = _p0 + 1 * PIP                                        # 1 pip of drift (ok)
+_far = _p0 + (MAX_ENTRY_DRIFT_PIPS + 5) * PIP                # 15 pips of drift (fails)
+_on_tgt = TradePlan("long", _p0, _p0 - _risk, _p0 + RR_TARGET * _risk, 80)
+_lowrr = TradePlan("long", _p0, _p0 - _risk, _p0 + 0.5 * _risk, 80)   # 0.5R: fails both modes
+assert validate_plan(_on_tgt, _near)[0]
+assert not validate_plan(_lowrr, _near)[0]                                           # bad R:R
+assert not validate_plan(TradePlan("short", _p0, _p0 - _risk, _p0 + 2 * _risk, 80), _near)[0]  # sides wrong
+assert not validate_plan(_on_tgt, _far)[0]                                           # entry drift
+assert validate_plan(TradePlan("none"), _p0)[0]
 print("validator ready")
 
 # %% [markdown]

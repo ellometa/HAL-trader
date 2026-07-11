@@ -521,6 +521,42 @@ irrelevant inside a −10% eval budget, potentially relevant for personal capita
 
 ---
 
+## Test 16 — ICT on gold: Turtle Soup, Judas, MMXM vs the most ICT-traded market
+
+**Question.** Gold is the ICT community's favorite instrument — if the stop-hunt
+narrative works anywhere, it's XAUUSD. Fresh 5-year tick-derived data (Dukascopy,
+2021-06 → 2026-06, 2.26M 1m bars, 99.9% coverage; candle fast-path `fetchm1` after
+the cold-CDN tick route degraded). Engine made instrument-agnostic
+(BOT_SYMBOL/BOT_PIP/BOT_SPREAD; gold pip $0.10, spread $0.30). New model: **MMXM**
+(Market Maker Buy/Sell Model — consolidation → liquidity run → SMR at HTF array →
+return to origin), strict + loose mechanizations. SLIP-ADX rode along as the
+cross-instrument check of its thin FX edge.
+
+| strategy | trades | final equity | IS avg R | OOS avg R (2025+) |
+|---|---|---|---|---|
+| TURTLE SOUP | 674 | **$38,620 (−61%)** | −0.108R (25% win) | −0.150R (19% win) |
+| MIDNIGHT RAID | 642 | $92,292 | −0.046R | +0.149R (157 tr) |
+| MMXM-STRICT | 378 | $92,201 | −0.046R | +0.102R (83 tr) |
+| MMXM-LOOSE | 456 | $72,454 | −0.120R | +0.133R (103 tr) |
+| SLIP-ADX | 39 | $96,870 | −0.009R | **−0.262R (10 tr)** |
+| **buy & hold gold** | — | **$235,871 (+136%)** | — | — |
+
+**Findings.** (1) **Every ICT model lost money on gold across 5 years — during
+gold's greatest bull market.** Doing nothing made +136%; the best ICT strategy made
+−3%. (2) **Turtle Soup is now buried on two instruments** (723 EUR/USD + 674 gold
+trades, −0.08 to −0.15R everywhere): fading stop-hunts has negative expectancy,
+robustly measured. (3) **SLIP-ADX's cross-instrument check failed** (−0.26R OOS on
+gold) — the oldest open question is answered: the 10-trade EUR/USD OOS record was
+luck, not an edge. (4) The one flicker: MIDNIGHT RAID and MMXM turned positive in
+the 2025+ sub-period (+0.10 to +0.15R on 83–157 trades) — but all three were
+negative in-sample on 3× the trades, the OOS window coincides with gold's parabolic
+2025-26 leg (long-bias artifacts), and after 16 tests the prior on "this time it's
+real" is low. Not tradeable without a fresh confirmation window. (5) The ICT
+catalog is now complete: **seven models, two instruments, ~3,900 trades — no
+positive expectancy anywhere.**
+
+---
+
 ## Conclusion
 
 1. **The signal source is the problem, not the implementation.** ICT
