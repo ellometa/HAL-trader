@@ -23,34 +23,29 @@ the detectors are the ground truth.
 ## Architecture
 
 ```
-  ┌──────────────────────────┐
-  │ TradingView tab (Chrome) │
-  │  ┌────────────────────┐  │
-  │  │ HAL panel overlay  │  │  reads ?symbol= from URL
-  │  │  - floating button │  │  user types question
-  │  │  - SSE chat stream │  │
-  │  └─────────┬──────────┘  │
-  └────────────┼─────────────┘
-               │ POST /analyze {symbol, timeframe, query}
-               ▼
-  ┌──────────────────────────────────────────┐
-  │ FastAPI backend (127.0.0.1:8000)         │
-  │                                          │
-  │  ohlc.py  ─►  Binance / yfinance (cached)│
-  │     │                                    │
-  │     ▼                                    │
-  │  ict/*  ─►  {fvgs, order_blocks,         │
-  │     │        structure, liquidity_sweeps}│
-  │     ▼                                    │
-  │  prompts.py  ◄── notes.md (from Notion)  │
-  │     │                                    │
-  │     ▼                                    │
-  │  Gemini 2.5 Flash (streaming)            │
-  └────────────┬─────────────────────────────┘
-               │ SSE: meta / token / done
-               ▼
-  Extension renders tokens progressively
+  TradingView tab ──POST /analyze──► ohlc.py ──► ict/* ──► prompts.py ──► Gemini
+        ▲                                                                    │
+        └───────────────────── SSE: meta / token / done ◄────────────────────┘
 ```
+
+**1. Ask.** The panel reads `?symbol=` out of the TradingView URL, pairs
+it with your typed question, and POSTs `{symbol, timeframe, query}` to
+the local FastAPI backend on `127.0.0.1:8000`.
+
+**2. Bars.** `ohlc.py` fetches candles — Binance for crypto, yfinance for
+everything else — cached 60s per (symbol, timeframe), so a follow-up
+question about the same chart costs no network.
+
+**3. Geometry.** `ict/` walks those bars and returns plain JSON: `fvgs`,
+`order_blocks`, `structure`, `liquidity_sweeps`. Deterministic pandas,
+unit-tested against fixtures in `tests/`.
+
+**4. Prose.** `prompts.py` folds that JSON in with your own trading notes
+(`notes.md`) and hands the result to Gemini 2.5 Flash, which streams the
+answer back token by token into the panel.
+
+The seam is between 3 and 4. Detection is the ground truth; the model
+only narrates it — swap the model and what HAL *sees* does not change.
 
 ## Install
 
